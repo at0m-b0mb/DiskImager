@@ -11,6 +11,7 @@ from disktool.core.imaging import (
     _get_device_size,
     _resolve_source,
     backup,
+    erase,
     flash,
     restore,
 )
@@ -136,3 +137,29 @@ class TestFlash:
         ok = flash(str(img), str(dst), verify=False)
         assert ok is True
         assert dst.read_bytes() == img.read_bytes()
+
+
+class TestErase:
+    def test_erase_creates_zeros(self, tmp_path: Path) -> None:
+        f = _tmp_file(tmp_path, b"X" * 512)
+        ok = erase(str(f), passes=1)
+        assert ok is True
+        assert f.read_bytes() == b"\x00" * 512
+
+    def test_erase_dry_run(self, tmp_path: Path) -> None:
+        data = b"original"
+        f = _tmp_file(tmp_path, data)
+        ok = erase(str(f), passes=1, dry_run=True)
+        assert ok is True
+        assert f.read_bytes() == data  # unchanged
+
+    def test_erase_missing_target(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            erase("/nonexistent/target.img")
+
+    def test_erase_progress_callback(self, tmp_path: Path) -> None:
+        f = _tmp_file(tmp_path, b"Y" * 1024)
+        calls: list[tuple[int, int, float]] = []
+        erase(str(f), passes=1,
+              progress_callback=lambda a, b, c: calls.append((a, b, c)))
+        assert calls, "progress_callback should be called"

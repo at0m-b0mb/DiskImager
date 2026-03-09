@@ -22,6 +22,7 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
+from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
@@ -411,6 +412,154 @@ def cmd_gui() -> None:
         console.print(f"[bold red]GUI dependencies not installed:[/bold red] {exc}")
         console.print("Install with: [bold]pip install customtkinter[/bold]")
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# info
+# ---------------------------------------------------------------------------
+
+@main.command("info")
+@click.argument("device")
+@click.pass_context
+def cmd_info(ctx: click.Context, device: str) -> None:
+    """Show detailed information about DEVICE.
+
+    Example:
+        disktool info /dev/sda
+    """
+    from disktool.core.disk import format_size, get_drives
+
+    with console.status("[bold green]Scanning drives…[/bold green]"):
+        drives = get_drives()
+
+    drive = next((d for d in drives if d.get("path") == device), None)
+    if not drive:
+        console.print(f"[bold red]Error:[/bold red] Device [cyan]{device}[/cyan] not found in drive list.")
+        console.print("[dim]Run [bold]disktool list[/bold] to see available devices.[/dim]")
+        sys.exit(1)
+
+    console.print()
+    console.print(Rule(f"[bold cyan]Drive Info: {device}[/bold cyan]"))
+
+    # Main info table
+    info_table = Table(show_header=False, box=None, padding=(0, 2))
+    info_table.add_column("Key", style="dim", width=18)
+    info_table.add_column("Value", style="bold")
+
+    def yn(val: bool) -> Text:
+        return Text("Yes", style="bold red") if val else Text("No", style="green")
+
+    info_table.add_row("Device", f"[cyan]{drive.get('path', '')}[/cyan]")
+    info_table.add_row("Model", drive.get("model", "Unknown"))
+    size_bytes = drive.get("size_bytes", 0)
+    info_table.add_row("Size", f"{format_size(size_bytes).strip()}  ([dim]{size_bytes:,} bytes[/dim])")
+    info_table.add_row("Removable", yn(drive.get("is_removable", False)))
+    info_table.add_row("System Disk", yn(drive.get("is_system", False)))
+    info_table.add_row("Partitions", str(len(drive.get("partitions", []))))
+
+    console.print(info_table)
+
+    partitions = drive.get("partitions", [])
+    if partitions:
+        console.print()
+        console.print(Rule("[dim]Partitions[/dim]"))
+        part_table = Table(
+            show_header=True,
+            header_style="bold cyan",
+            border_style="bright_black",
+        )
+        part_table.add_column("Name")
+        part_table.add_column("Path", style="cyan")
+        part_table.add_column("Size", justify="right")
+        part_table.add_column("Mount Point")
+        part_table.add_column("Filesystem")
+
+        for part in partitions:
+            psize = part.get("size_bytes", 0)
+            part_table.add_row(
+                part.get("name", ""),
+                part.get("path", ""),
+                format_size(psize).strip(),
+                part.get("mountpoint", "—") or "—",
+                part.get("filesystem", "—") or "—",
+            )
+        console.print(part_table)
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+# erase
+# ---------------------------------------------------------------------------
+
+@main.command("erase")
+@click.argument("dest")
+@click.option("--passes", default=1, show_default=True, type=click.IntRange(1, 7),
+              help="Number of overwrite passes (1=zeros, 2+=random+zeros).")
+@click.option("--dry-run", is_flag=True, default=False, help="Simulate without writing.")
+@click.option("--dangerous", is_flag=True, default=False, help="Allow erasing system disks.")
+@click.pass_context
+def cmd_erase(
+    ctx: click.Context,
+    dest: str,
+    passes: int,
+    dry_run: bool,
+    dangerous: bool,
+) -> None:
+    """Securely erase DEST by overwriting with zeros.
+
+    Use --passes 3 for a DoD-style multi-pass wipe (random data then zeros).
+
+    Example:
+        disktool erase /dev/sdb
+        disktool erase /dev/sdb --passes 3
+    """
+    from disktool.core.disk import get_drives
+    from disktool.core.imaging import erase
+
+    drives = get_drives()
+    dest_info = next((d for d in drives if d.get("path") == dest), None)
+
+    if dest_info and dest_info.get("is_system") and not dangerous:
+        console.print(
+            f"[bold red]Error:[/bold red] {dest} is a system disk. "
+            "Use [bold]--dangerous[/bold] to override this safety check."
+        )
+        sys.exit(1)
+
+    size_gb = dest_info.get("size_gb", "?") if dest_info else "?"
+    model = dest_info.get("model", "unknown device") if dest_info else "unknown device"
+
+    if not dry_run:
+        _require_confirmation(
+            f"About to [red]SECURELY ERASE[/red] [bold]{size_gb} GB {model}[/bold] ({dest})\n"
+            f"using [bold]{passes}[/bold] pass(es).\n\n"
+            "All data will be permanently and irrecoverably destroyed."
+        )
+
+    with _make_progress() as progress:
+        task_id = progress.add_task(
+            f"Erase {dest} ({passes} {'passes' if passes != 1 else 'pass'})", total=None
+        )
+
+        def _progress(bytes_done: int, total: int, speed: float) -> None:
+            progress.update(task_id, completed=bytes_done, total=total if total else None)
+
+        try:
+            ok = erase(dest, passes=passes, dry_run=dry_run, progress_callback=_progress)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"\n[bold red]Error:[/bold red] {exc}")
+            sys.exit(1)
+        except PermissionError:
+            console.print(f"\n[bold red]Permission denied.[/bold red] Try running as root/Administrator.")
+            sys.exit(1)
+
+    if dry_run:
+        console.print("[yellow][DRY RUN] No data erased.[/yellow]")
+    elif ok:
+        console.print(f"\n[bold green]✓ Erase complete![/bold green]")
+    else:
+        console.print(f"\n[bold red]✗ Erase failed.[/bold red]")
+        sys.exit(2)
 
 
 if __name__ == "__main__":

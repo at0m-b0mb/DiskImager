@@ -273,6 +273,69 @@ def _resolve_source(image_path: Path) -> Path:
         return tmpdir / members[0]
 
 
+# ---------------------------------------------------------------------------
+# Erase
+# ---------------------------------------------------------------------------
+
+def erase(
+    dest: str,
+    passes: int = 1,
+    dry_run: bool = False,
+    progress_callback: Callable[[int, int, float], None] | None = None,
+) -> bool:
+    """Overwrite *dest* with zeros (or random data for multiple passes).
+
+    Args:
+        dest: Path to the block device or file to erase.
+        passes: Number of overwrite passes (1 = zeros, 2+ = random then zeros).
+        dry_run: Simulate without writing.
+        progress_callback: Called with (bytes_done, total_bytes, speed_bps).
+
+    Returns:
+        True on success.
+    """
+    import os
+    import secrets
+
+    dest_path = Path(dest)
+    if not dest_path.exists():
+        raise FileNotFoundError(f"Target not found: {dest}")
+
+    total_bytes = _get_device_size(dest)
+    if total_bytes <= 0:
+        raise ValueError(
+            f"Cannot determine size of {dest}. "
+            "Only regular files and known block devices are supported."
+        )
+    logger.info("Erase %s  (%d bytes, %d pass(es))", dest, total_bytes, passes)
+
+    if dry_run:
+        logger.info("[DRY RUN] No data written.")
+        return True
+
+    start_time = time.monotonic()
+    for pass_num in range(passes):
+        use_random = (passes > 1) and (pass_num < passes - 1)
+        bytes_done = 0
+        with open(dest, "wb") as fh:
+            while bytes_done < total_bytes:
+                remaining = total_bytes - bytes_done
+                chunk_len = min(CHUNK_SIZE, remaining)
+                chunk = secrets.token_bytes(chunk_len) if use_random else b"\x00" * chunk_len
+                written = fh.write(chunk)
+                bytes_done += written
+                elapsed = time.monotonic() - start_time
+                speed = bytes_done / elapsed if elapsed > 0 else 0
+                if progress_callback:
+                    progress_callback(bytes_done, total_bytes, speed)
+                if total_bytes > 0 and bytes_done >= total_bytes:
+                    break
+        logger.info("Erase pass %d/%d complete.", pass_num + 1, passes)
+
+    logger.info("Erase complete.")
+    return True
+
+
 def _verify_destination(
     dest: str,
     expected_digest: str,

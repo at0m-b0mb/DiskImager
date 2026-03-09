@@ -80,3 +80,31 @@ class TestCLIVerify:
         result = runner.invoke(main, ["verify", str(f)])
         assert result.exit_code == 0
         assert hashlib.sha256(data).hexdigest() in result.output
+
+
+class TestCLIErase:
+    def test_erase_dry_run(self, tmp_path: Path) -> None:
+        f = tmp_path / "disk.img"
+        f.write_bytes(b"data" * 256)
+        runner = CliRunner()
+        result = runner.invoke(main, ["erase", str(f), "--dry-run"])
+        assert result.exit_code == 0
+        assert f.read_bytes() == b"data" * 256  # unchanged
+
+    def test_erase_help(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(main, ["erase", "--help"])
+        assert result.exit_code == 0
+        assert "passes" in result.output.lower()
+
+
+class TestCLIInfo:
+    def test_info_unknown_device(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(main, ["info", "/dev/nonexistent999"])
+        assert result.exit_code == 1
+
+    def test_info_help(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(main, ["info", "--help"])
+        assert result.exit_code == 0
