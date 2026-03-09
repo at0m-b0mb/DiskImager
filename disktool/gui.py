@@ -15,17 +15,18 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Lazy import guard
+# Lazy import guard – raise early so callers get a clean ImportError instead
+# of a confusing AttributeError from the class definitions below.
 # ---------------------------------------------------------------------------
 try:
     import customtkinter as ctk
     from tkinter import filedialog, messagebox
     import tkinter as tk
 except ImportError as _e:  # pragma: no cover
-    ctk = None  # type: ignore[assignment]
-    _IMPORT_ERROR = _e
-else:
-    _IMPORT_ERROR = None
+    raise ImportError(
+        "GUI dependencies are not installed. "
+        "Run: pip install customtkinter"
+    ) from _e
 
 
 # ---------------------------------------------------------------------------

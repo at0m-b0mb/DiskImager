@@ -133,3 +133,35 @@ class TestCLIClone:
         )
         # Source is checked before dry-run check, so missing source always exits non-zero
         assert result.exit_code == 1
+
+
+class TestCLIGui:
+    def test_gui_missing_deps_exits_with_message(self) -> None:
+        """When customtkinter is not installed the gui command must exit 1 with a
+        helpful message – not crash with AttributeError."""
+        from unittest.mock import patch
+
+        runner = CliRunner()
+        with patch("builtins.__import__", side_effect=_gui_import_raiser):
+            result = runner.invoke(main, ["gui"])
+
+        assert result.exit_code == 1
+        assert "not installed" in result.output.lower() or "failed" in result.output.lower()
+
+    def test_gui_help(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(main, ["gui", "--help"])
+        assert result.exit_code == 0
+        assert "graphical" in result.output.lower() or "gui" in result.output.lower()
+
+
+import builtins as _builtins
+
+_real_import = _builtins.__import__
+
+
+def _gui_import_raiser(name: str, *args: object, **kwargs: object) -> object:
+    """Raises ImportError for disktool.gui, passes everything else through."""
+    if name == "disktool.gui":
+        raise ImportError("GUI dependencies are not installed. Run: pip install customtkinter")
+    return _real_import(name, *args, **kwargs)
