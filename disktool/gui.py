@@ -1,9 +1,11 @@
-"""DiskImager GUI – polished CustomTkinter interface (v3)."""
+"""DiskImager GUI – polished CustomTkinter interface."""
 
 from __future__ import annotations
 
 import logging
+import os
 import platform
+import subprocess
 import sys
 import threading
 import time
@@ -954,8 +956,8 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             for p in parts:
                 pb = ctk.CTkFrame(pcard, fg_color="transparent")
                 pb.pack(fill="x", padx=4, pady=2)
-                from disktool.core.disk import format_size
-                psize = format_size(p.get("size_bytes", 0)).strip()
+                from disktool.core.disk import format_size as _fmt_size
+                psize = _fmt_size(p.get("size_bytes", 0)).strip()
                 mount = p.get("mountpoint") or "—"
                 fs    = p.get("filesystem") or "—"
                 ctk.CTkLabel(
@@ -1359,11 +1361,9 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
     @staticmethod
     def _open_folder(folder: Path) -> None:
         """Open *folder* in the OS file manager."""
-        import subprocess
         try:
             if sys.platform == "win32":
-                import os as _os
-                _os.startfile(str(folder))  # type: ignore[attr-defined]
+                os.startfile(str(folder))  # type: ignore[attr-defined]
             elif sys.platform == "darwin":
                 subprocess.Popen(["open", str(folder)])
             else:

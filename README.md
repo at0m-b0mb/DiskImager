@@ -304,7 +304,7 @@ python main.py verify backup.img
 # Compare against a known hash
 python main.py verify backup.img --hash abc123...
 
-# Auto-detect from .sha256 sidecar (created automatically by backup)
+# Auto-detect from .sha256 sidecar (created automatically by the Backup operation)
 python main.py verify backup.img
 ```
 
