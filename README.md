@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Cross-platform disk imaging, cloning, and flashing tool</strong><br>
-  <em>A full-featured, production-ready solution for backup, restore, and USB flashing on Windows, macOS, and Linux.</em>
+  <em>Back up, restore, and flash drives with confidence – on Windows, macOS, and Linux.</em>
 </p>
 
 <p align="center">
@@ -16,11 +16,26 @@
 
 ---
 
+## 🚀 What is DiskImager?
+
+DiskImager is a free, open-source tool for backing up, restoring, and flashing disk drives.  
+Whether you want to clone a USB drive, save a bootable ISO onto a flash drive, or create a full byte-for-byte image of a hard disk, DiskImager has you covered.
+
+**It is designed to be safe by default:**
+
+- 🔒 Destructive operations require typing `CONFIRM` before anything happens
+- 🛡️ System disks are automatically locked from writes unless you explicitly allow it
+- ✅ SHA-256 verification after every restore and flash to catch errors
+- 🧪 Dry-run mode lets you preview what *would* happen without touching any data
+
+---
+
 ## Table of Contents
 
 - [Features](#features)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [GUI Guide](#gui-guide)
 - [CLI Reference](#cli-reference)
   - [list](#list)
   - [backup](#backup)
@@ -29,17 +44,18 @@
   - [verify](#verify)
   - [info](#info)
   - [erase](#erase)
-- [GUI Guide](#gui-guide)
 - [Safety Features](#safety-features)
 - [Project Structure](#project-structure)
 - [Building a Standalone Executable](#building-a-standalone-executable)
 - [Running Tests](#running-tests)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
 - [Contributing](#contributing)
 - [License](#license)
 
 ---
 
-## Features
+## ✨ Features
 
 | Feature | Description |
 |---------|-------------|
@@ -48,19 +64,23 @@
 | **Flash** | Flash `.img`, `.iso`, or `.zip` archives to USB drives |
 | **Verify** | Compute and compare SHA-256/SHA-512 hashes of image files |
 | **Erase** | Securely overwrite a disk with zeros (multi-pass DoD-style wipe) |
-| **Drive Info** | Detailed partition table and drive metadata |
-| **GUI** | Modern dark/light-theme CustomTkinter interface with live progress |
+| **Drive Info** | Detailed partition table and drive metadata, in both GUI and CLI |
+| **GUI** | Modern dark/light-theme interface with live progress bars and tabbed layout |
 | **CLI** | Beautiful Rich tables, progress bars, and colour output |
 | **Cross-platform** | Windows, macOS, and Linux from a single Python codebase |
 
 ### GUI Highlights
 
-- **Clickable drive table** – click any row to auto-fill device paths
+- **Clickable drive table** – click any row to auto-fill device paths in the active tab
+- **Drive Info popup** – click the "Drive Info" button to see partition details for a selected drive
+- **Erase tab** – securely wipe a drive with configurable overwrite passes, directly from the GUI
 - **Activity log** – timestamped record of every operation
 - **Dark / Light theme** toggle
 - **Custom CONFIRM dialog** – type CONFIRM before any destructive operation
 - **Progress dialog** – live speed, percentage, ETA, and elapsed timer
-- **Five tabs** – Backup · Restore · Flash · Verify · Activity
+- **Copy Hash button** – copy the computed SHA-256 digest to clipboard after verification
+- **Open Folder** – after a successful backup, jump straight to the output folder
+- **Six tabs** – Backup · Restore · Flash · Verify · Erase · Activity
 - **Status bar** – live operation status and Python version
 
 ### CLI Highlights
@@ -93,12 +113,14 @@ pip install -r requirements.txt
 > pip install pywin32
 > ```
 
+> **Linux/macOS:** You may need to run with `sudo` to access raw block devices.
+
 ---
 
 ## Quick Start
 
 ```bash
-# Launch the GUI
+# Launch the GUI (recommended for most users)
 python main.py gui
 
 # List all physical drives
@@ -110,6 +132,55 @@ python main.py backup /dev/sdb my-usb.img
 # Flash an ISO to a USB drive
 python main.py flash ubuntu-24.04.iso /dev/sdb
 ```
+
+---
+
+## GUI Guide
+
+Launch the GUI with:
+
+```bash
+python main.py gui
+```
+
+### Layout
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  DiskImager v1.0.0        │  Physical Drives          [Drive Info]           │
+│                           │  [table of detected drives]                      │
+│  Backup                   │  [selected drive info bar]                       │
+│  Restore                  ├──────────────────────────────────────────────────│
+│  Flash                    │ [Backup][Restore][Flash][Verify][Erase][Activity]│
+│  Verify                   │                                                  │
+│  Erase                    │  (tab content for active operation)              │
+│  Activity                 │                                                  │
+│                           │                                                  │
+│  Dark mode  [toggle]      │                                                  │
+│  [Scan Drives]            │                                                  │
+│  Linux x86_64             ├──────────────────────────────────────────────────│
+│                           │ Status bar: Ready  │  Python 3.12.3              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Step-by-Step Workflow
+
+1. **Scan** – click **Scan Drives** in the sidebar to detect all physical drives
+2. **Select** – click a drive row; the device path auto-fills the active tab's field
+3. **Configure** – use Browse… to pick source/destination files; tick options as needed
+4. **Run** – click the operation button (e.g. **Start Backup**); a progress dialog shows speed, ETA, and elapsed time
+5. **Confirm** – for destructive operations (Restore, Flash, Erase), type `CONFIRM` in the safety dialog
+6. **Review** – check the **Activity** tab for a timestamped log of all operations
+
+### Tips
+
+| Tip | Detail |
+|-----|--------|
+| **Drive Info** | Select a drive, then click **Drive Info** in the header to see partition details |
+| **Copy Hash** | After running Verify, click **Copy Hash** to copy the SHA-256 to your clipboard |
+| **Open Folder** | After a successful Backup, DiskImager asks if you want to open the output folder |
+| **Dry Run** | Tick **Dry run** in any tab to simulate the operation without writing any data |
+| **Dark / Light** | Toggle the **Dark mode** switch in the sidebar |
 
 ---
 
@@ -233,7 +304,7 @@ python main.py verify backup.img
 # Compare against a known hash
 python main.py verify backup.img --hash abc123...
 
-# Auto-detect from .sha256 sidecar
+# Auto-detect from .sha256 sidecar (created automatically by backup)
 python main.py verify backup.img
 ```
 
@@ -294,53 +365,11 @@ python main.py erase /dev/sdb --passes 3
 
 ---
 
-## GUI Guide
-
-Launch the GUI:
-
-```bash
-python main.py gui
-```
-
-### Layout
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  DiskImager v1.0.0          │  Physical Drives                          │
-│                             │  [table of detected drives]               │
-│  Backup                     │  [selected drive info bar]                │
-│  Restore                    ├───────────────────────────────────────────┤
-│  Flash                      │ [Backup] [Restore] [Flash] [Verify] [Log] │
-│  Verify                     │                                           │
-│  Activity                   │  (tab content for active operation)       │
-│                             │                                           │
-│  Dark mode  [toggle]        │                                           │
-│  [Scan Drives]              │                                           │
-│  Linux x86_64               ├───────────────────────────────────────────┤
-│                             │ Status bar: Ready  │  Python 3.12.3       │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Workflow
-
-1. **Scan** – click **Scan Drives** to enumerate all physical drives
-2. **Select** – click any drive row to select it; the device path auto-fills the active tab
-3. **Configure** – browse for source/dest files and choose options
-4. **Run** – click the operation button; a progress dialog shows speed, ETA, and elapsed time
-5. **Confirm** – for destructive operations, type `CONFIRM` in the safety dialog
-6. **Review** – check the **Activity** tab for a timestamped log of all operations
-
-### Theme
-
-Use the **Dark mode** toggle in the sidebar to switch between dark and light themes.
-
----
-
 ## Safety Features
 
 | Feature | Description |
 |---------|-------------|
-| **System disk lock** | Restore, Flash, and Erase are blocked on system disks unless `--dangerous` is passed (CLI) |
+| **System disk lock** | Restore, Flash, and Erase are blocked on system disks unless `--dangerous` is passed (CLI) or confirmed (GUI) |
 | **CONFIRM prompt** | All destructive operations require the user to type `CONFIRM` (custom dialog in GUI, typed prompt in CLI) |
 | **SHA-256 verification** | Post-write read-back verification for Restore and Flash |
 | **Dry-run mode** | `--dry-run` / checkbox simulates the full operation without writing a single byte |
@@ -404,6 +433,62 @@ pytest tests/
 # Run with coverage report
 pytest tests/ --cov=disktool --cov-report=term-missing
 ```
+
+---
+
+## Troubleshooting
+
+### "Permission denied" when accessing a drive
+
+You need elevated privileges to read/write raw block devices.
+
+- **Linux/macOS:** run with `sudo python main.py ...`
+- **Windows:** right-click your terminal and choose **Run as Administrator**
+
+### No drives appear in the list
+
+- Run as root/Administrator (see above).
+- On Windows, make sure `pywin32` is installed (`pip install pywin32`).
+- Try clicking **Scan Drives** again after granting permissions.
+
+### GUI won't start – "customtkinter not installed"
+
+Install the GUI dependency:
+
+```bash
+pip install customtkinter
+```
+
+### Verification failed after restore/flash
+
+This can indicate a hardware problem (faulty USB cable or drive) or that the source image is corrupt.  
+Try a different USB port or cable, or re-download the image and verify its hash.
+
+### ZIP archive not recognised during Flash
+
+Make sure the `.zip` contains exactly one `.img` or `.iso` file at the root level.
+
+---
+
+## FAQ
+
+**Q: Can I use DiskImager to create a bootable USB drive from an ISO?**  
+A: Yes – use the **Flash** tab (GUI) or `python main.py flash <image.iso> <device>` (CLI).
+
+**Q: Will it work on Windows?**  
+A: Yes. Device paths on Windows look like `\\.\PhysicalDrive0`. Run as Administrator.
+
+**Q: Is the backup a 1:1 raw copy?**  
+A: Yes. DiskImager reads every byte of the source device and writes them to the destination file. The result is a raw `.img` file usable with other tools (e.g. `dd`, Balena Etcher, Win32DiskImager).
+
+**Q: How do I know if my backup is intact?**  
+A: Every backup creates a `.sha256` sidecar file. Run `python main.py verify backup.img` (or use the Verify tab) to recompute and compare the hash at any time.
+
+**Q: What does "erase" actually do?**  
+A: With 1 pass it overwrites every byte with zeros. With 2+ passes it writes random data first, then zeros on the final pass, following a simplified DoD 5220.22-M approach.
+
+**Q: Can I cancel an in-progress operation?**  
+A: Yes – click the **Cancel** button in the progress dialog. The operation will stop at the next chunk boundary.
 
 ---
 
