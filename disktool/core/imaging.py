@@ -274,6 +274,79 @@ def _resolve_source(image_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Clone
+# ---------------------------------------------------------------------------
+
+def clone(
+    source: str,
+    dest: str,
+    dry_run: bool = False,
+    verify: bool = True,
+    progress_callback: Callable[[int, int, float], None] | None = None,
+) -> str:
+    """Clone *source* device/file directly to *dest* device/file.
+
+    Unlike :func:`backup` (which writes to an image file) this copies raw
+    bytes from one live device to another without an intermediate file.
+
+    Args:
+        source: Source block device or file path.
+        dest: Destination block device or file path.
+        dry_run: If True, simulate without writing.
+        verify: If True, read *dest* back and compare SHA-256 after writing.
+        progress_callback: Called with (bytes_done, total_bytes, speed_bps).
+
+    Returns:
+        SHA-256 hex digest of the copied data (empty string for dry-run).
+
+    Raises:
+        FileNotFoundError: If *source* does not exist.
+        ValueError: If source and destination are the same path.
+    """
+    import hashlib
+
+    source_path = Path(source)
+    if not source_path.exists():
+        raise FileNotFoundError(f"Source not found: {source}")
+    if Path(source).resolve() == Path(dest).resolve():
+        raise ValueError("Source and destination must be different paths.")
+
+    total_bytes = _get_device_size(source)
+    logger.info("Clone %s -> %s  (%d bytes)", source, dest, total_bytes)
+
+    if dry_run:
+        logger.info("[DRY RUN] No data written.")
+        return ""
+
+    h = hashlib.sha256()
+    bytes_done = 0
+    start_time = time.monotonic()
+
+    with open(source, "rb", buffering=0) as src, open(dest, "wb") as dst:
+        while True:
+            chunk = src.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            dst.write(chunk)
+            h.update(chunk)
+            bytes_done += len(chunk)
+            elapsed = time.monotonic() - start_time
+            speed = bytes_done / elapsed if elapsed > 0 else 0
+            if progress_callback:
+                progress_callback(bytes_done, total_bytes, speed)
+
+    digest = h.hexdigest()
+    logger.info("Clone complete. SHA-256: %s", digest)
+
+    if verify:
+        ok = _verify_destination(dest, digest, progress_callback)
+        if not ok:
+            logger.error("Clone verification FAILED.")
+
+    return digest
+
+
+# ---------------------------------------------------------------------------
 # Erase
 # ---------------------------------------------------------------------------
 

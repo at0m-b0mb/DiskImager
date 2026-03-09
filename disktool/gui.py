@@ -397,8 +397,20 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
+        from disktool import settings as _settings
+        self._settings = _settings
+
+        # Restore saved theme before building UI
+        saved_theme = _settings.get("theme", "dark")
+        global _THEME
+        _THEME = saved_theme
+        ctk.set_appearance_mode(saved_theme)
+
         self.title(f"DiskImager  v{self.VERSION}")
-        self.geometry("1020x700")
+
+        # Restore window geometry
+        saved_geo = _settings.get("window_geometry", "1020x700")
+        self.geometry(saved_geo)
         self.minsize(860, 560)
 
         self._drives: list[dict[str, Any]] = []
@@ -407,7 +419,25 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._activity_log: list[str] = []
 
         self._build_ui()
+
+        # Sync theme switch with saved value
+        if saved_theme == "dark":
+            self._theme_switch.select()
+        else:
+            self._theme_switch.deselect()
+
         self.after(120, self._refresh_drives)
+
+        # Save window size/position on close
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self) -> None:
+        try:
+            geo = self.geometry()
+            self._settings.set_key("window_geometry", geo)
+        except Exception:
+            pass
+        self.destroy()
 
     # =========================================================================
     # Top-level layout
@@ -448,6 +478,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             ("Backup",   "backup"),
             ("Restore",  "restore"),
             ("Flash",    "flash"),
+            ("Clone",    "clone"),
             ("Verify",   "verify"),
             ("Erase",    "erase"),
             ("Activity", "activity"),
@@ -566,12 +597,13 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         )
         tv.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 6))
         self._tabview = tv
-        for tab in ("Backup", "Restore", "Flash", "Verify", "Erase", "Activity"):
+        for tab in ("Backup", "Restore", "Flash", "Clone", "Verify", "Erase", "Activity"):
             tv.add(tab)
         tv.set("Backup")
         self._build_backup_tab(tv.tab("Backup"))
         self._build_restore_tab(tv.tab("Restore"))
         self._build_flash_tab(tv.tab("Flash"))
+        self._build_clone_tab(tv.tab("Clone"))
         self._build_verify_tab(tv.tab("Verify"))
         self._build_erase_tab(tv.tab("Erase"))
         self._build_activity_tab(tv.tab("Activity"))
@@ -678,6 +710,17 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
                        "backup.img", self._restore_browse_src)
         self._form_row(tab, "Target device:", "_restore_dst", "/dev/sdc")
         self._divider(tab)
+        # Image metadata inspector
+        meta_frame = ctk.CTkFrame(tab, fg_color=P("card2"), corner_radius=6)
+        meta_frame.pack(fill="x", padx=16, pady=(2, 6))
+        self._restore_meta_lbl = ctk.CTkLabel(
+            meta_frame,
+            text="Select an image file to see its metadata.",
+            font=ctk.CTkFont(size=11), text_color=P("text_muted"),
+            anchor="w", wraplength=640, justify="left",
+        )
+        self._restore_meta_lbl.pack(padx=10, pady=6, anchor="w")
+        self._divider(tab)
         opt = ctk.CTkFrame(tab, fg_color="transparent")
         opt.pack(fill="x", padx=16, pady=2)
         self._restore_dry_run = ctk.CTkCheckBox(
@@ -728,7 +771,40 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             height=38, command=self._start_flash,
         ).pack(padx=16, pady=(4, 14), anchor="w")
 
-    def _build_verify_tab(self, tab: Any) -> None:
+    def _build_clone_tab(self, tab: Any) -> None:
+        self._section_title(tab, "Clone Drive Directly to Another Drive")
+        self._divider(tab)
+        self._form_row(tab, "Source device:", "_clone_src",
+                       "/dev/sdb  or  \\\\.\\PhysicalDrive1")
+        self._form_row(tab, "Target device:", "_clone_dst",
+                       "/dev/sdc  or  \\\\.\\PhysicalDrive2")
+        self._divider(tab)
+        opt = ctk.CTkFrame(tab, fg_color="transparent")
+        opt.pack(fill="x", padx=16, pady=2)
+        self._clone_dry_run = ctk.CTkCheckBox(
+            opt, text="Dry run (simulate, no write)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._clone_dry_run.pack(side="left", padx=(0, 20))
+        self._clone_no_verify = ctk.CTkCheckBox(
+            opt, text="Skip post-clone verification",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._clone_no_verify.pack(side="left")
+        self._divider(tab)
+        self._info_box(
+            tab,
+            "Copies every byte from source to target without an intermediate image file.\n"
+            "The target must be the same size or larger than the source.",
+        )
+        self._warn_box(tab, "All data on the target device will be permanently destroyed.")
+        ctk.CTkButton(
+            tab, text="Start Clone",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("warning"), hover_color="#92690d",
+            text_color="#000000", height=38, command=self._start_clone,
+        ).pack(padx=16, pady=(4, 14), anchor="w")
+
         self._section_title(tab, "Verify Image Integrity (SHA-256)")
         self._divider(tab)
         self._form_row(tab, "Image file:", "_verify_src",
@@ -825,6 +901,11 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         row = ctk.CTkFrame(tab, fg_color="transparent")
         row.pack(fill="x", padx=16, pady=(0, 12))
         ctk.CTkButton(
+            row, text="Save Log...", width=120,
+            fg_color=P("card2"), hover_color=P("hover"),
+            text_color=P("text"), command=self._save_log,
+        ).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(
             row, text="Clear Log", width=120,
             fg_color=P("card2"), hover_color=P("hover"),
             text_color=P("text"), command=self._clear_log,
@@ -902,6 +983,14 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         elif current == "Flash":
             self._flash_dst.delete(0, "end")
             self._flash_dst.insert(0, path)
+        elif current == "Clone":
+            # Fill source if empty, otherwise fill dest
+            if not self._clone_src.get().strip():
+                self._clone_src.delete(0, "end")
+                self._clone_src.insert(0, path)
+            else:
+                self._clone_dst.delete(0, "end")
+                self._clone_dst.insert(0, path)
         elif current == "Erase":
             self._erase_dst.delete(0, "end")
             self._erase_dst.insert(0, path)
@@ -990,6 +1079,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             "backup":   "Backup",
             "restore":  "Restore",
             "flash":    "Flash",
+            "clone":    "Clone",
             "verify":   "Verify",
             "erase":    "Erase",
             "activity": "Activity",
@@ -1011,6 +1101,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         global _THEME
         _THEME = "dark" if self._theme_switch.get() == 1 else "light"
         ctk.set_appearance_mode(_THEME)
+        self._settings.set_key("theme", _THEME)
 
     # =========================================================================
     # File dialogs
@@ -1033,6 +1124,38 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         if p:
             self._restore_src.delete(0, "end")
             self._restore_src.insert(0, p)
+            self._load_image_metadata(p, self._restore_meta_lbl)
+
+    def _load_image_metadata(self, image_path_str: str, label: Any) -> None:
+        """Read the .json sidecar for an image and update *label* with its contents."""
+        import json as _json
+        try:
+            meta_path = Path(image_path_str).with_suffix(".json")
+            if meta_path.exists():
+                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+                size_bytes = meta.get("size_bytes", 0)
+                size_str = _human_size(size_bytes) if size_bytes else "?"
+                parts = [
+                    f"Source: {meta.get('source', '?')}",
+                    f"Size: {size_str}",
+                    f"Created: {meta.get('created_at', '?')}",
+                    f"Platform: {meta.get('platform', '?')}",
+                    f"SHA-256: {str(meta.get('sha256', '?'))[:24]}...",
+                ]
+                label.configure(
+                    text="  |  ".join(parts),
+                    text_color=P("success"),
+                )
+            else:
+                label.configure(
+                    text="No metadata sidecar (.json) found for this image.",
+                    text_color=P("text_muted"),
+                )
+        except Exception as exc:
+            label.configure(
+                text=f"Could not read metadata: {exc}",
+                text_color=P("warning"),
+            )
 
     def _flash_browse_src(self) -> None:
         p = filedialog.askopenfilename(
@@ -1076,6 +1199,25 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             self._log_text.configure(state="disabled")
         except Exception:
             pass
+
+    def _save_log(self) -> None:
+        """Save the activity log to a user-chosen .txt file."""
+        if not self._activity_log:
+            messagebox.showinfo("Empty Log", "There is nothing in the log to save yet.")
+            return
+        p = filedialog.asksaveasfilename(
+            title="Save Activity Log",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not p:
+            return
+        try:
+            Path(p).write_text("".join(self._activity_log), encoding="utf-8")
+            self._set_status(f"Log saved to {p}")
+            self._log(f"Log saved: {p}")
+        except Exception as exc:
+            messagebox.showerror("Save Failed", str(exc))
 
     def _set_status(self, text: str) -> None:
         try:
@@ -1153,7 +1295,30 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._run_op("flash", f"Flash {Path(src).name}",
                      {"image": src, "dest": dst, "dry_run": dry, "verify": not skip_verify})
 
-    def _start_verify(self) -> None:
+    def _start_clone(self) -> None:
+        src = self._clone_src.get().strip()
+        dst = self._clone_dst.get().strip()
+        dry = self._clone_dry_run.get() == 1
+        skip_verify = self._clone_no_verify.get() == 1
+        if not src or not dst:
+            messagebox.showerror("Missing input",
+                                 "Please fill in both source and target device paths.")
+            return
+        if src == dst:
+            messagebox.showerror("Same Device",
+                                 "Source and destination must be different devices.")
+            return
+        info = next((d for d in self._drives if d.get("path") == dst), None)
+        if info and info.get("is_system"):
+            messagebox.showerror("System Disk Blocked",
+                f"{dst} is a system disk. Clone to system disks is blocked.")
+            return
+        if not dry and not self._wipe_confirm(dst):
+            return
+        self._log(f"Clone: {src} -> {dst}" + (" [dry-run]" if dry else ""))
+        self._run_clone_op(src, dst, dry_run=dry, verify=not skip_verify)
+
+
         src      = self._verify_src.get().strip()
         expected = self._verify_hash.get().strip() or None
         if not src:
@@ -1349,6 +1514,48 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
                 self.after(0, _err)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _run_clone_op(self, src: str, dst: str, dry_run: bool, verify: bool) -> None:
+        from disktool.core.imaging import clone
+        dlg = ProgressDialog(self, f"Clone {Path(src).name} → {Path(dst).name}")
+        self._set_status("Clone in progress...")
+
+        def _progress(done: int, total: int, speed: float) -> None:
+            if dlg.cancelled:
+                raise InterruptedError("Cancelled by user.")
+            try:
+                self.after(0, lambda: dlg.update_progress(done, total, speed))
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            try:
+                digest = clone(src, dst, dry_run=dry_run, verify=verify,
+                               progress_callback=_progress)
+                def _ok() -> None:
+                    if digest:
+                        dlg.finish(f"Clone complete! SHA-256: {digest[:16]}...", success=True)
+                    else:
+                        dlg.finish("Clone complete! (dry-run)", success=True)
+                    self._log("Clone finished OK.")
+                    self._set_status("Clone complete.")
+                self.after(0, _ok)
+            except InterruptedError:
+                self.after(0, lambda: dlg.finish("Cancelled.", success=False))
+                self.after(0, lambda: self._log("Clone cancelled."))
+                self.after(0, lambda: self._set_status("Cancelled."))
+            except Exception as exc:
+                err = str(exc)
+                logger.error("clone error: %s", exc)
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Clone Failed", err)
+                    self._log(f"Clone ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
 
     def _offer_open_folder(self, folder: Path) -> None:
         """Ask whether to open the folder containing the backup image."""

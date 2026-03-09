@@ -415,6 +415,84 @@ def cmd_gui() -> None:
 
 
 # ---------------------------------------------------------------------------
+# clone
+# ---------------------------------------------------------------------------
+
+@main.command("clone")
+@click.argument("source")
+@click.argument("dest")
+@click.option("--dry-run", is_flag=True, default=False, help="Simulate without writing.")
+@click.option("--dangerous", is_flag=True, default=False, help="Allow cloning to/from system disks.")
+@click.option("--no-verify", is_flag=True, default=False, help="Skip post-clone SHA-256 verification.")
+@click.pass_context
+def cmd_clone(
+    ctx: click.Context,
+    source: str,
+    dest: str,
+    dry_run: bool,
+    dangerous: bool,
+    no_verify: bool,
+) -> None:
+    """Clone SOURCE device directly to DEST device (no intermediate file).
+
+    Both SOURCE and DEST must be accessible block devices or files.
+    All data on DEST will be overwritten.
+
+    Example:
+        disktool clone /dev/sdb /dev/sdc
+    """
+    from disktool.core.disk import get_drives
+    from disktool.core.imaging import clone
+
+    drives = get_drives()
+    dest_info = next((d for d in drives if d.get("path") == dest), None)
+
+    if dest_info and dest_info.get("is_system") and not dangerous:
+        console.print(
+            f"[bold red]Error:[/bold red] {dest} is a system disk. "
+            "Use [bold]--dangerous[/bold] to override this safety check."
+        )
+        sys.exit(1)
+
+    size_gb = dest_info.get("size_gb", "?") if dest_info else "?"
+    model = dest_info.get("model", "unknown device") if dest_info else "unknown device"
+
+    if not dry_run:
+        _require_confirmation(
+            f"About to clone [cyan]{source}[/cyan] directly onto "
+            f"[bold]{size_gb} GB {model}[/bold] ({dest}).\n"
+            "All data on the target will be permanently destroyed."
+        )
+
+    with _make_progress() as progress:
+        task_id = progress.add_task(f"Clone {source} -> {dest}", total=None)
+
+        def _progress(bytes_done: int, total: int, speed: float) -> None:
+            progress.update(task_id, completed=bytes_done, total=total if total else None)
+
+        try:
+            digest = clone(
+                source, dest, dry_run=dry_run, verify=not no_verify,
+                progress_callback=_progress,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"\n[bold red]Error:[/bold red] {exc}")
+            sys.exit(1)
+        except PermissionError:
+            console.print(f"\n[bold red]Permission denied.[/bold red] Try running as root/Administrator.")
+            sys.exit(1)
+
+    if dry_run:
+        console.print("[yellow][DRY RUN] No data written.[/yellow]")
+    elif digest:
+        console.print(f"\n[bold green]✓ Clone complete![/bold green]")
+        console.print(f"  SHA-256: [dim]{digest}[/dim]")
+    else:
+        console.print(f"\n[bold red]✗ Clone failed.[/bold red]")
+        sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
 # info
 # ---------------------------------------------------------------------------
 
