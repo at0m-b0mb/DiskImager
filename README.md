@@ -14,6 +14,12 @@
   <img src="https://img.shields.io/badge/Tests-48%20passing-success" alt="Tests">
 </p>
 
+> **Repository description (GitHub *About* field):**
+> *DiskImager — cross-platform disk imaging, backup, restore, USB flash & secure erase tool with a modern dark/light-mode GUI and a rich colour CLI. Supports Windows, macOS and Linux. Includes SHA-256 verification, dry-run mode, and multi-pass secure erase.*
+
+> **Suggested GitHub topics:**
+> `disk-imaging` · `backup` · `restore` · `usb-flash` · `iso-flash` · `disk-clone` · `secure-erase` · `python` · `customtkinter` · `gui` · `cli` · `cross-platform` · `sha256` · `storage` · `system-administration` · `linux` · `windows` · `macos` · `pyinstaller` · `dark-mode`
+
 ---
 
 ## Table of Contents
