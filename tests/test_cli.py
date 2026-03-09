@@ -131,5 +131,5 @@ class TestCLIClone:
         result = runner.invoke(
             main, ["clone", "/no/such/device", str(tmp_path / "dst.img"), "--dry-run"]
         )
-        # Dry-run with missing source should exit non-zero
-        assert result.exit_code in (0, 1)
+        # Source is checked before dry-run check, so missing source always exits non-zero
+        assert result.exit_code == 1

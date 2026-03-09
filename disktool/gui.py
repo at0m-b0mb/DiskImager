@@ -805,6 +805,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             text_color="#000000", height=38, command=self._start_clone,
         ).pack(padx=16, pady=(4, 14), anchor="w")
 
+    def _build_verify_tab(self, tab: Any) -> None:
         self._section_title(tab, "Verify Image Integrity (SHA-256)")
         self._divider(tab)
         self._form_row(tab, "Image file:", "_verify_src",
