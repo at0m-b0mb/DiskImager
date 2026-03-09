@@ -11,6 +11,7 @@ from disktool.core.imaging import (
     _get_device_size,
     _resolve_source,
     backup,
+    clone,
     erase,
     flash,
     restore,
@@ -163,3 +164,37 @@ class TestErase:
         erase(str(f), passes=1,
               progress_callback=lambda a, b, c: calls.append((a, b, c)))
         assert calls, "progress_callback should be called"
+
+
+class TestClone:
+    def test_basic_clone(self, tmp_path: Path) -> None:
+        src = _tmp_file(tmp_path, b"G" * 4096, "src.img")
+        dst = tmp_path / "dst.img"
+        digest = clone(str(src), str(dst), verify=False)
+        assert dst.exists()
+        assert dst.read_bytes() == src.read_bytes()
+        assert digest == hashlib.sha256(b"G" * 4096).hexdigest()
+
+    def test_clone_dry_run(self, tmp_path: Path) -> None:
+        src = _tmp_file(tmp_path, b"H" * 1024, "src.img")
+        dst = tmp_path / "dst.img"
+        result = clone(str(src), str(dst), dry_run=True, verify=False)
+        assert result == ""
+        assert not dst.exists()
+
+    def test_clone_missing_source(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            clone("/nonexistent/source.img", str(tmp_path / "dst.img"))
+
+    def test_clone_same_path(self, tmp_path: Path) -> None:
+        src = _tmp_file(tmp_path, b"I" * 512, "src.img")
+        with pytest.raises(ValueError, match="different paths"):
+            clone(str(src), str(src))
+
+    def test_clone_progress_called(self, tmp_path: Path) -> None:
+        src = _tmp_file(tmp_path, b"J" * 8192, "src.img")
+        dst = tmp_path / "dst.img"
+        calls: list[tuple[int, int, float]] = []
+        clone(str(src), str(dst), verify=False,
+              progress_callback=lambda a, b, c: calls.append((a, b, c)))
+        assert calls, "progress_callback should have been called"

@@ -1,9 +1,11 @@
-"""DiskImager GUI – polished CustomTkinter interface (v2)."""
+"""DiskImager GUI – polished CustomTkinter interface."""
 
 from __future__ import annotations
 
 import logging
+import os
 import platform
+import subprocess
 import sys
 import threading
 import time
@@ -395,8 +397,20 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
+        from disktool import settings as _settings
+        self._settings = _settings
+
+        # Restore saved theme before building UI
+        saved_theme = _settings.get("theme", "dark")
+        global _THEME
+        _THEME = saved_theme
+        ctk.set_appearance_mode(saved_theme)
+
         self.title(f"DiskImager  v{self.VERSION}")
-        self.geometry("1020x700")
+
+        # Restore window geometry
+        saved_geo = _settings.get("window_geometry", "1020x700")
+        self.geometry(saved_geo)
         self.minsize(860, 560)
 
         self._drives: list[dict[str, Any]] = []
@@ -405,7 +419,25 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._activity_log: list[str] = []
 
         self._build_ui()
+
+        # Sync theme switch with saved value
+        if saved_theme == "dark":
+            self._theme_switch.select()
+        else:
+            self._theme_switch.deselect()
+
         self.after(120, self._refresh_drives)
+
+        # Save window size/position on close
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self) -> None:
+        try:
+            geo = self.geometry()
+            self._settings.set_key("window_geometry", geo)
+        except Exception:
+            pass
+        self.destroy()
 
     # =========================================================================
     # Top-level layout
@@ -446,7 +478,9 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             ("Backup",   "backup"),
             ("Restore",  "restore"),
             ("Flash",    "flash"),
+            ("Clone",    "clone"),
             ("Verify",   "verify"),
+            ("Erase",    "erase"),
             ("Activity", "activity"),
         ]:
             btn = _NavButton(sb, label, tab, self._switch_tab)
@@ -504,11 +538,19 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             hdr, text="Physical Drives",
             font=ctk.CTkFont(size=13, weight="bold"), text_color=P("text"),
         ).pack(side="left")
+        self._drive_info_btn = ctk.CTkButton(
+            hdr, text="Drive Info", width=88,
+            font=ctk.CTkFont(size=11),
+            fg_color=P("card2"), hover_color=P("hover"),
+            text_color=P("text"), state="disabled",
+            command=self._show_drive_info,
+        )
+        self._drive_info_btn.pack(side="right", padx=(0, 4))
         self._drive_status_lbl = ctk.CTkLabel(
             hdr, text="Scanning...",
             font=ctk.CTkFont(size=11), text_color=P("text_muted"),
         )
-        self._drive_status_lbl.pack(side="right")
+        self._drive_status_lbl.pack(side="right", padx=(0, 8))
 
         col_hdr = ctk.CTkFrame(outer, fg_color=P("card2"), corner_radius=4)
         col_hdr.pack(fill="x", padx=10, pady=(0, 2))
@@ -555,13 +597,15 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         )
         tv.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 6))
         self._tabview = tv
-        for tab in ("Backup", "Restore", "Flash", "Verify", "Activity"):
+        for tab in ("Backup", "Restore", "Flash", "Clone", "Verify", "Erase", "Activity"):
             tv.add(tab)
         tv.set("Backup")
         self._build_backup_tab(tv.tab("Backup"))
         self._build_restore_tab(tv.tab("Restore"))
         self._build_flash_tab(tv.tab("Flash"))
+        self._build_clone_tab(tv.tab("Clone"))
         self._build_verify_tab(tv.tab("Verify"))
+        self._build_erase_tab(tv.tab("Erase"))
         self._build_activity_tab(tv.tab("Activity"))
 
     def _build_statusbar(self) -> None:
@@ -666,6 +710,17 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
                        "backup.img", self._restore_browse_src)
         self._form_row(tab, "Target device:", "_restore_dst", "/dev/sdc")
         self._divider(tab)
+        # Image metadata inspector
+        meta_frame = ctk.CTkFrame(tab, fg_color=P("card2"), corner_radius=6)
+        meta_frame.pack(fill="x", padx=16, pady=(2, 6))
+        self._restore_meta_lbl = ctk.CTkLabel(
+            meta_frame,
+            text="Select an image file to see its metadata.",
+            font=ctk.CTkFont(size=11), text_color=P("text_muted"),
+            anchor="w", wraplength=640, justify="left",
+        )
+        self._restore_meta_lbl.pack(padx=10, pady=6, anchor="w")
+        self._divider(tab)
         opt = ctk.CTkFrame(tab, fg_color="transparent")
         opt.pack(fill="x", padx=16, pady=2)
         self._restore_dry_run = ctk.CTkCheckBox(
@@ -716,6 +771,40 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             height=38, command=self._start_flash,
         ).pack(padx=16, pady=(4, 14), anchor="w")
 
+    def _build_clone_tab(self, tab: Any) -> None:
+        self._section_title(tab, "Clone Drive Directly to Another Drive")
+        self._divider(tab)
+        self._form_row(tab, "Source device:", "_clone_src",
+                       "/dev/sdb  or  \\\\.\\PhysicalDrive1")
+        self._form_row(tab, "Target device:", "_clone_dst",
+                       "/dev/sdc  or  \\\\.\\PhysicalDrive2")
+        self._divider(tab)
+        opt = ctk.CTkFrame(tab, fg_color="transparent")
+        opt.pack(fill="x", padx=16, pady=2)
+        self._clone_dry_run = ctk.CTkCheckBox(
+            opt, text="Dry run (simulate, no write)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._clone_dry_run.pack(side="left", padx=(0, 20))
+        self._clone_no_verify = ctk.CTkCheckBox(
+            opt, text="Skip post-clone verification",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._clone_no_verify.pack(side="left")
+        self._divider(tab)
+        self._info_box(
+            tab,
+            "Copies every byte from source to target without an intermediate image file.\n"
+            "The target must be the same size or larger than the source.",
+        )
+        self._warn_box(tab, "All data on the target device will be permanently destroyed.")
+        ctk.CTkButton(
+            tab, text="Start Clone",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("warning"), hover_color="#92690d",
+            text_color="#000000", height=38, command=self._start_clone,
+        ).pack(padx=16, pady=(4, 14), anchor="w")
+
     def _build_verify_tab(self, tab: Any) -> None:
         self._section_title(tab, "Verify Image Integrity (SHA-256)")
         self._divider(tab)
@@ -727,7 +816,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         )
         self._divider(tab)
         res_frame = ctk.CTkFrame(tab, fg_color=P("card2"), corner_radius=6)
-        res_frame.pack(fill="x", padx=16, pady=(2, 8))
+        res_frame.pack(fill="x", padx=16, pady=(2, 4))
         self._verify_result_lbl = ctk.CTkLabel(
             res_frame, text="No verification run yet.",
             font=ctk.CTkFont(size=12), text_color=P("text_muted"),
@@ -738,11 +827,64 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             tab,
             "If a .sha256 sidecar exists next to the image it is loaded automatically.",
         )
+        btn_row = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(4, 14))
         ctk.CTkButton(
-            tab, text="Verify Hash",
+            btn_row, text="Verify Hash",
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color=P("accent2"), hover_color="#1a5fcc",
             height=38, command=self._start_verify,
+        ).pack(side="left")
+        self._copy_hash_btn = ctk.CTkButton(
+            btn_row, text="Copy Hash",
+            font=ctk.CTkFont(size=12),
+            fg_color=P("card2"), hover_color=P("hover"),
+            text_color=P("text"), height=38, width=110,
+            command=self._copy_hash_to_clipboard, state="disabled",
+        )
+        self._copy_hash_btn.pack(side="left", padx=(8, 0))
+        self._last_digest: Optional[str] = None
+
+    def _build_erase_tab(self, tab: Any) -> None:
+        self._section_title(tab, "Securely Erase a Drive")
+        self._divider(tab)
+        self._form_row(tab, "Target device:", "_erase_dst", "/dev/sdb")
+        self._divider(tab)
+        opt = ctk.CTkFrame(tab, fg_color="transparent")
+        opt.pack(fill="x", padx=16, pady=2)
+        self._erase_dry_run = ctk.CTkCheckBox(
+            opt, text="Dry run (simulate, no write)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._erase_dry_run.pack(side="left", padx=(0, 20))
+        self._divider(tab)
+        passes_row = ctk.CTkFrame(tab, fg_color="transparent")
+        passes_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            passes_row, text="Overwrite passes:", width=150, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._erase_passes_var = tk.StringVar(value="1")
+        self._erase_passes_menu = ctk.CTkOptionMenu(
+            passes_row,
+            values=["1", "2", "3", "5", "7"],
+            variable=self._erase_passes_var,
+            font=ctk.CTkFont(size=12),
+            width=80,
+        )
+        self._erase_passes_menu.pack(side="left", padx=(4, 8))
+        ctk.CTkLabel(
+            passes_row,
+            text="(1 = zeros only; 2+ = random data then zeros)",
+            font=ctk.CTkFont(size=11), text_color=P("text_muted"),
+        ).pack(side="left")
+        self._divider(tab)
+        self._warn_box(tab, "⚠  All data on the target device will be permanently and irrecoverably destroyed.")
+        ctk.CTkButton(
+            tab, text="Erase Drive",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("danger"), hover_color="#b91c1c",
+            height=38, command=self._start_erase,
         ).pack(padx=16, pady=(4, 14), anchor="w")
 
     def _build_activity_tab(self, tab: Any) -> None:
@@ -759,6 +901,11 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._log_text.configure(state="disabled")
         row = ctk.CTkFrame(tab, fg_color="transparent")
         row.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkButton(
+            row, text="Save Log...", width=120,
+            fg_color=P("card2"), hover_color=P("hover"),
+            text_color=P("text"), command=self._save_log,
+        ).pack(side="right", padx=(8, 0))
         ctk.CTkButton(
             row, text="Clear Log", width=120,
             fg_color=P("card2"), hover_color=P("hover"),
@@ -798,6 +945,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             row.destroy()
         self._drive_rows.clear()
         self._selected_drive = None
+        self._drive_info_btn.configure(state="disabled")
         self._sel_lbl.configure(
             text="Click a drive row to select it -- auto-fills device path below."
         )
@@ -825,6 +973,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._sel_lbl.configure(
             text=f"Selected: {path}   {sg:.1f} GB   {model}   {usb}{sys_}"
         )
+        self._drive_info_btn.configure(state="normal")
         current = self._tabview.get()
         if current == "Backup":
             self._backup_src.delete(0, "end")
@@ -835,19 +984,105 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         elif current == "Flash":
             self._flash_dst.delete(0, "end")
             self._flash_dst.insert(0, path)
+        elif current == "Clone":
+            # Fill source if empty, otherwise fill dest
+            if not self._clone_src.get().strip():
+                self._clone_src.delete(0, "end")
+                self._clone_src.insert(0, path)
+            else:
+                self._clone_dst.delete(0, "end")
+                self._clone_dst.insert(0, path)
+        elif current == "Erase":
+            self._erase_dst.delete(0, "end")
+            self._erase_dst.insert(0, path)
         self._set_status(f"Selected: {path}  {sg:.1f} GB  {model}")
         self._log(f"Drive selected: {path}  ({sg:.1f} GB  {model}  {usb})")
 
-    # =========================================================================
-    # Navigation
-    # =========================================================================
+    def _show_drive_info(self) -> None:
+        drive = self._selected_drive
+        if not drive:
+            return
+        dlg = ctk.CTkToplevel(self)
+        dlg.title(f"Drive Info: {drive.get('path', '')}")
+        dlg.geometry("480x420")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        ctk.CTkLabel(
+            dlg, text=f"Drive Info: {drive.get('path', '')}",
+            font=ctk.CTkFont(size=14, weight="bold"), text_color=P("text"),
+        ).pack(pady=(18, 4), padx=20, anchor="w")
+
+        card = ctk.CTkFrame(dlg, fg_color=P("card2"), corner_radius=6)
+        card.pack(fill="x", padx=20, pady=(0, 8))
+
+        def _row(key: str, val: str) -> None:
+            r = ctk.CTkFrame(card, fg_color="transparent")
+            r.pack(fill="x", padx=12, pady=2)
+            ctk.CTkLabel(r, text=key, width=130, anchor="w",
+                         font=ctk.CTkFont(size=12), text_color=P("text_muted"),
+                         ).pack(side="left")
+            ctk.CTkLabel(r, text=val, anchor="w",
+                         font=ctk.CTkFont(size=12), text_color=P("text"),
+                         ).pack(side="left")
+
+        sg = drive.get("size_gb", 0)
+        size_str = f"{sg:.2f} GB  ({drive.get('size_bytes', 0):,} bytes)"
+        _row("Device:",     drive.get("path", "—"))
+        _row("Model:",      drive.get("model", "Unknown"))
+        _row("Size:",       size_str)
+        _row("Type:",       "USB / Removable" if drive.get("is_removable") else "Internal")
+        _row("System Disk:", "YES" if drive.get("is_system") else "No")
+        _row("Partitions:", str(len(drive.get("partitions", []))))
+
+        parts = drive.get("partitions", [])
+        if parts:
+            ctk.CTkLabel(
+                dlg, text="Partitions",
+                font=ctk.CTkFont(size=13, weight="bold"), text_color=P("text"),
+            ).pack(pady=(4, 2), padx=20, anchor="w")
+            pcard = ctk.CTkScrollableFrame(dlg, fg_color=P("card2"), corner_radius=6, height=140)
+            pcard.pack(fill="x", padx=20, pady=(0, 8))
+            for p in parts:
+                pb = ctk.CTkFrame(pcard, fg_color="transparent")
+                pb.pack(fill="x", padx=4, pady=2)
+                from disktool.core.disk import format_size as _fmt_size
+                psize = _fmt_size(p.get("size_bytes", 0)).strip()
+                mount = p.get("mountpoint") or "—"
+                fs    = p.get("filesystem") or "—"
+                ctk.CTkLabel(
+                    pb, text=p.get("path", p.get("name", "")),
+                    font=ctk.CTkFont(size=11), text_color=P("accent2"), width=120, anchor="w",
+                ).pack(side="left")
+                ctk.CTkLabel(
+                    pb, text=psize,
+                    font=ctk.CTkFont(size=11), text_color=P("text"), width=80, anchor="e",
+                ).pack(side="left")
+                ctk.CTkLabel(
+                    pb, text=mount,
+                    font=ctk.CTkFont(size=11), text_color=P("text_muted"), width=100, anchor="w",
+                ).pack(side="left", padx=(8, 0))
+                ctk.CTkLabel(
+                    pb, text=fs,
+                    font=ctk.CTkFont(size=11), text_color=P("text_muted"), width=60, anchor="w",
+                ).pack(side="left", padx=(4, 0))
+
+        ctk.CTkButton(
+            dlg, text="Close", width=100,
+            fg_color=P("card2"), hover_color=P("hover"),
+            text_color=P("text"), command=dlg.destroy,
+        ).pack(pady=(0, 14))
+
+
 
     def _switch_tab(self, tab_name: str) -> None:
         tab_map = {
             "backup":   "Backup",
             "restore":  "Restore",
             "flash":    "Flash",
+            "clone":    "Clone",
             "verify":   "Verify",
+            "erase":    "Erase",
             "activity": "Activity",
         }
         if tab_name in tab_map:
@@ -867,6 +1102,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         global _THEME
         _THEME = "dark" if self._theme_switch.get() == 1 else "light"
         ctk.set_appearance_mode(_THEME)
+        self._settings.set_key("theme", _THEME)
 
     # =========================================================================
     # File dialogs
@@ -889,6 +1125,38 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         if p:
             self._restore_src.delete(0, "end")
             self._restore_src.insert(0, p)
+            self._load_image_metadata(p, self._restore_meta_lbl)
+
+    def _load_image_metadata(self, image_path_str: str, label: Any) -> None:
+        """Read the .json sidecar for an image and update *label* with its contents."""
+        import json as _json
+        try:
+            meta_path = Path(image_path_str).with_suffix(".json")
+            if meta_path.exists():
+                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+                size_bytes = meta.get("size_bytes", 0)
+                size_str = _human_size(size_bytes) if size_bytes else "?"
+                parts = [
+                    f"Source: {meta.get('source', '?')}",
+                    f"Size: {size_str}",
+                    f"Created: {meta.get('created_at', '?')}",
+                    f"Platform: {meta.get('platform', '?')}",
+                    f"SHA-256: {str(meta.get('sha256', '?'))[:24]}...",
+                ]
+                label.configure(
+                    text="  |  ".join(parts),
+                    text_color=P("success"),
+                )
+            else:
+                label.configure(
+                    text="No metadata sidecar (.json) found for this image.",
+                    text_color=P("text_muted"),
+                )
+        except Exception as exc:
+            label.configure(
+                text=f"Could not read metadata: {exc}",
+                text_color=P("warning"),
+            )
 
     def _flash_browse_src(self) -> None:
         p = filedialog.askopenfilename(
@@ -932,6 +1200,25 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             self._log_text.configure(state="disabled")
         except Exception:
             pass
+
+    def _save_log(self) -> None:
+        """Save the activity log to a user-chosen .txt file."""
+        if not self._activity_log:
+            messagebox.showinfo("Empty Log", "There is nothing in the log to save yet.")
+            return
+        p = filedialog.asksaveasfilename(
+            title="Save Activity Log",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not p:
+            return
+        try:
+            Path(p).write_text("".join(self._activity_log), encoding="utf-8")
+            self._set_status(f"Log saved to {p}")
+            self._log(f"Log saved: {p}")
+        except Exception as exc:
+            messagebox.showerror("Save Failed", str(exc))
 
     def _set_status(self, text: str) -> None:
         try:
@@ -1009,7 +1296,30 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._run_op("flash", f"Flash {Path(src).name}",
                      {"image": src, "dest": dst, "dry_run": dry, "verify": not skip_verify})
 
-    def _start_verify(self) -> None:
+    def _start_clone(self) -> None:
+        src = self._clone_src.get().strip()
+        dst = self._clone_dst.get().strip()
+        dry = self._clone_dry_run.get() == 1
+        skip_verify = self._clone_no_verify.get() == 1
+        if not src or not dst:
+            messagebox.showerror("Missing input",
+                                 "Please fill in both source and target device paths.")
+            return
+        if src == dst:
+            messagebox.showerror("Same Device",
+                                 "Source and destination must be different devices.")
+            return
+        info = next((d for d in self._drives if d.get("path") == dst), None)
+        if info and info.get("is_system"):
+            messagebox.showerror("System Disk Blocked",
+                f"{dst} is a system disk. Clone to system disks is blocked.")
+            return
+        if not dry and not self._wipe_confirm(dst):
+            return
+        self._log(f"Clone: {src} -> {dst}" + (" [dry-run]" if dry else ""))
+        self._run_clone_op(src, dst, dry_run=dry, verify=not skip_verify)
+
+
         src      = self._verify_src.get().strip()
         expected = self._verify_hash.get().strip() or None
         if not src:
@@ -1023,6 +1333,8 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._verify_result_lbl.configure(
             text="Computing SHA-256...", text_color=P("text_muted")
         )
+        self._copy_hash_btn.configure(state="disabled")
+        self._last_digest = None
         self._set_status("Verifying...")
         dlg = ProgressDialog(self, "Verifying")
 
@@ -1077,7 +1389,79 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
                     text=msg, text_color=P("text"),
                 ))
                 self.after(0, lambda: self._log(f"Hash: {src} -> {digest[:16]}..."))
+            self._last_digest = digest
+            self.after(0, lambda: self._copy_hash_btn.configure(state="normal"))
             self.after(0, lambda: self._set_status("Verification complete."))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _copy_hash_to_clipboard(self) -> None:
+        if self._last_digest:
+            self.clipboard_clear()
+            self.clipboard_append(self._last_digest)
+            self._set_status("Hash copied to clipboard.")
+
+    def _start_erase(self) -> None:
+        dst = self._erase_dst.get().strip()
+        dry = self._erase_dry_run.get() == 1
+        try:
+            passes = int(self._erase_passes_var.get())
+        except (ValueError, AttributeError):
+            passes = 1
+        if not dst:
+            messagebox.showerror("Missing input", "Please enter the target device path.")
+            return
+        info = next((d for d in self._drives if d.get("path") == dst), None)
+        if info and info.get("is_system"):
+            messagebox.showerror(
+                "System Disk Blocked",
+                f"{dst} is a system disk. Erase of system disks is blocked for safety.",
+            )
+            return
+        if not dry:
+            sg    = info.get("size_gb", "?") if info else "?"
+            model = info.get("model", "unknown") if info else "unknown"
+            if not ask_confirm(
+                self,
+                f"You are about to SECURELY ERASE  {sg} GB  {model}  ({dst})\n"
+                f"using {passes} overwrite pass(es).\n\n"
+                "All data will be permanently and irrecoverably destroyed.",
+            ):
+                return
+        self._log(f"Erase: {dst}  passes={passes}" + (" [dry-run]" if dry else ""))
+        self._set_status("Erase in progress...")
+        dlg = ProgressDialog(self, f"Erase {dst}")
+
+        def _progress(done: int, total: int, speed: float) -> None:
+            if dlg.cancelled:
+                raise InterruptedError("Cancelled by user.")
+            try:
+                self.after(0, lambda: dlg.update_progress(done, total, speed))
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            from disktool.core.imaging import erase
+            try:
+                erase(dst, passes=passes, dry_run=dry, progress_callback=_progress)
+                def _ok() -> None:
+                    dlg.finish("Erase complete!", success=True)
+                    self._log("Erase finished OK.")
+                    self._set_status("Erase complete.")
+                self.after(0, _ok)
+            except InterruptedError:
+                self.after(0, lambda: dlg.finish("Cancelled.", success=False))
+                self.after(0, lambda: self._log("Erase cancelled."))
+                self.after(0, lambda: self._set_status("Cancelled."))
+            except Exception as exc:
+                err = str(exc)
+                logger.error("erase error: %s", exc)
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Erase Failed", err)
+                    self._log(f"Erase ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -1105,6 +1489,12 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
                 def _ok() -> None:
                     if op == "backup" and result:
                         dlg.finish(f"Backup complete! SHA-256: {str(result)[:16]}...", success=True)
+                        # Offer to open containing folder
+                        dest = kwargs.get("dest", "")
+                        if dest:
+                            dest_path = Path(dest)
+                            if dest_path.exists():
+                                self._offer_open_folder(dest_path.parent)
                     else:
                         dlg.finish(f"{op.capitalize()} complete!", success=True)
                     self._log(f"{op.capitalize()} finished OK.")
@@ -1125,6 +1515,69 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
                 self.after(0, _err)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _run_clone_op(self, src: str, dst: str, dry_run: bool, verify: bool) -> None:
+        from disktool.core.imaging import clone
+        dlg = ProgressDialog(self, f"Clone {Path(src).name} → {Path(dst).name}")
+        self._set_status("Clone in progress...")
+
+        def _progress(done: int, total: int, speed: float) -> None:
+            if dlg.cancelled:
+                raise InterruptedError("Cancelled by user.")
+            try:
+                self.after(0, lambda: dlg.update_progress(done, total, speed))
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            try:
+                digest = clone(src, dst, dry_run=dry_run, verify=verify,
+                               progress_callback=_progress)
+                def _ok() -> None:
+                    if digest:
+                        dlg.finish(f"Clone complete! SHA-256: {digest[:16]}...", success=True)
+                    else:
+                        dlg.finish("Clone complete! (dry-run)", success=True)
+                    self._log("Clone finished OK.")
+                    self._set_status("Clone complete.")
+                self.after(0, _ok)
+            except InterruptedError:
+                self.after(0, lambda: dlg.finish("Cancelled.", success=False))
+                self.after(0, lambda: self._log("Clone cancelled."))
+                self.after(0, lambda: self._set_status("Cancelled."))
+            except Exception as exc:
+                err = str(exc)
+                logger.error("clone error: %s", exc)
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Clone Failed", err)
+                    self._log(f"Clone ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+
+    def _offer_open_folder(self, folder: Path) -> None:
+        """Ask whether to open the folder containing the backup image."""
+        if messagebox.askyesno(
+            "Backup Complete",
+            f"Backup finished successfully!\n\nOpen the output folder?\n{folder}",
+        ):
+            self._open_folder(folder)
+
+    @staticmethod
+    def _open_folder(folder: Path) -> None:
+        """Open *folder* in the OS file manager."""
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception as exc:
+            logger.warning("Could not open folder %s: %s", folder, exc)
 
 
 # ---------------------------------------------------------------------------

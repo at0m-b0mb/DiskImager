@@ -108,3 +108,28 @@ class TestCLIInfo:
         runner = CliRunner()
         result = runner.invoke(main, ["info", "--help"])
         assert result.exit_code == 0
+
+
+class TestCLIClone:
+    def test_clone_help(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(main, ["clone", "--help"])
+        assert result.exit_code == 0
+        assert "source" in result.output.lower() or "SOURCE" in result.output
+
+    def test_clone_dry_run(self, tmp_path: Path) -> None:
+        src = tmp_path / "src.img"
+        src.write_bytes(b"K" * 512)
+        dst = tmp_path / "dst.img"
+        runner = CliRunner()
+        result = runner.invoke(main, ["clone", str(src), str(dst), "--dry-run"])
+        assert result.exit_code == 0
+        assert not dst.exists()
+
+    def test_clone_missing_source(self, tmp_path: Path) -> None:
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["clone", "/no/such/device", str(tmp_path / "dst.img"), "--dry-run"]
+        )
+        # Source is checked before dry-run check, so missing source always exits non-zero
+        assert result.exit_code == 1
