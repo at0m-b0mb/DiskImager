@@ -10,6 +10,7 @@ import pytest
 from disktool.core.imaging import (
     _get_device_size,
     _resolve_source,
+    _unmount_disk_darwin,
     backup,
     clone,
     erase,
@@ -198,3 +199,99 @@ class TestClone:
         clone(str(src), str(dst), verify=False,
               progress_callback=lambda a, b, c: calls.append((a, b, c)))
         assert calls, "progress_callback should have been called"
+
+
+class TestUnmountDiskDarwin:
+    """Tests for _unmount_disk_darwin – the macOS Resource-busy fix."""
+
+    def test_noop_on_non_darwin(self, tmp_path: Path) -> None:
+        """On non-darwin platforms _unmount_disk_darwin is a no-op."""
+        from unittest.mock import patch
+
+        with patch("sys.platform", "linux"):
+            with patch("subprocess.run") as mock_run:
+                _unmount_disk_darwin("/dev/sdb")
+                mock_run.assert_not_called()
+
+    def test_noop_for_regular_file_path(self, tmp_path: Path) -> None:
+        """For paths that don't start with /dev/, no unmount is attempted."""
+        from unittest.mock import patch
+
+        with patch("sys.platform", "darwin"):
+            with patch("subprocess.run") as mock_run:
+                _unmount_disk_darwin(str(tmp_path / "image.img"))
+                mock_run.assert_not_called()
+
+    def test_calls_diskutil_for_dev_disk(self) -> None:
+        """On darwin, diskutil unmountDisk is called for /dev/diskN paths."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "Unmount of all volumes on disk4 was successful"
+
+        with patch("sys.platform", "darwin"):
+            with patch("subprocess.run", return_value=mock_result) as mock_run:
+                _unmount_disk_darwin("/dev/disk4")
+                mock_run.assert_called_once()
+                cmd = mock_run.call_args[0][0]
+                assert "diskutil" in cmd
+                assert "unmountDisk" in cmd
+                assert "/dev/disk4" in cmd
+
+    def test_normalises_rdisk_to_disk(self) -> None:
+        """rdiskN paths are normalised to diskN before calling diskutil."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "Unmount of all volumes on disk4 was successful"
+
+        with patch("sys.platform", "darwin"):
+            with patch("subprocess.run", return_value=mock_result) as mock_run:
+                _unmount_disk_darwin("/dev/rdisk4")
+                cmd = mock_run.call_args[0][0]
+                assert "/dev/disk4" in cmd  # rdisk4 → disk4
+
+    def test_normalises_partition_to_whole_disk(self) -> None:
+        """Partition paths like /dev/disk4s1 are mapped to /dev/disk4."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "Unmount of all volumes on disk4 was successful"
+
+        with patch("sys.platform", "darwin"):
+            with patch("subprocess.run", return_value=mock_result) as mock_run:
+                _unmount_disk_darwin("/dev/disk4s1")
+                cmd = mock_run.call_args[0][0]
+                assert "/dev/disk4" in cmd
+
+    def test_handles_diskutil_failure_gracefully(self) -> None:
+        """If diskutil returns non-zero, no exception is raised."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "disk4 was already unmounted or is not mounted"
+
+        with patch("sys.platform", "darwin"):
+            with patch("subprocess.run", return_value=mock_result):
+                _unmount_disk_darwin("/dev/disk4")  # must not raise
+
+    def test_handles_subprocess_exception_gracefully(self) -> None:
+        """If subprocess.run raises (e.g. diskutil not on PATH), no exception propagates."""
+        from unittest.mock import patch
+
+        with patch("sys.platform", "darwin"):
+            with patch("subprocess.run", side_effect=FileNotFoundError("diskutil not found")):
+                _unmount_disk_darwin("/dev/disk4")  # must not raise
+
+    def test_noop_for_non_disk_dev_path(self) -> None:
+        """Paths like /dev/null or /dev/zero don't trigger diskutil."""
+        from unittest.mock import patch
+
+        with patch("sys.platform", "darwin"):
+            with patch("subprocess.run") as mock_run:
+                _unmount_disk_darwin("/dev/null")
+                mock_run.assert_not_called()
