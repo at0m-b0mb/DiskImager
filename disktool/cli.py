@@ -412,6 +412,9 @@ def cmd_gui() -> None:
         console.print(f"[bold red]GUI dependencies not installed:[/bold red] {exc}")
         console.print("Install with: [bold]pip install customtkinter[/bold]")
         sys.exit(1)
+    except Exception as exc:  # e.g. tkinter.TclError on a headless server
+        console.print(f"[bold red]Failed to launch GUI:[/bold red] {exc}")
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

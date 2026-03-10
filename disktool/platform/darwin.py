@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
-import json
-import re
 import subprocess
 from typing import Any
 
 
 def _diskutil(*args: str) -> dict[str, Any] | None:
-    """Run diskutil and return parsed plist output as a dict."""
+    """Run diskutil and return parsed plist output as a dict.
+
+    The ``-plist`` flag must appear immediately after the verb (subcommand)
+    and before any positional arguments.  Placing it at the end causes
+    diskutil to ignore the flag and return plain text, which makes
+    ``plistlib.loads`` raise an exception and the function return ``None``.
+    """
+    if not args:
+        return None
     try:
+        # Correct order: diskutil <verb> -plist [args…]
         result = subprocess.run(
-            ["diskutil", *args, "-plist"],
+            ["diskutil", args[0], "-plist", *args[1:]],
             capture_output=True,
             text=True,
             timeout=30,
@@ -27,20 +34,8 @@ def _diskutil(*args: str) -> dict[str, Any] | None:
 
 
 def _diskutil_list() -> dict[str, Any] | None:
-    try:
-        result = subprocess.run(
-            ["diskutil", "list", "-plist", "physical"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            return None
-        import plistlib
-
-        return plistlib.loads(result.stdout.encode())
-    except Exception:
-        return None
+    """Run ``diskutil list -plist physical`` and return parsed plist."""
+    return _diskutil("list", "physical")
 
 
 def _diskutil_info(disk: str) -> dict[str, Any] | None:
@@ -69,23 +64,27 @@ def is_system_disk(disk_id: str) -> bool:
 
 
 def _get_partitions(disk_id: str) -> list[dict[str, Any]]:
-    info = _diskutil("info", disk_id)
-    if not info:
+    """Return partitions for *disk_id* using ``diskutil list -plist``."""
+    data = _diskutil("list", disk_id)
+    if not data:
         return []
     partitions: list[dict[str, Any]] = []
-    for part in info.get("Partitions", []):
-        part_id = part.get("DeviceIdentifier", "")
-        size_bytes = part.get("Size", 0)
-        partitions.append(
-            {
-                "name": part_id,
-                "path": f"/dev/{part_id}",
-                "size_bytes": size_bytes,
-                "size_gb": round(size_bytes / 1_073_741_824, 2),
-                "mountpoint": part.get("MountPoint", ""),
-                "filesystem": part.get("FilesystemType", ""),
-            }
-        )
+    for disk_entry in data.get("AllDisksAndPartitions", []):
+        if disk_entry.get("DeviceIdentifier") != disk_id:
+            continue
+        for part in disk_entry.get("Partitions", []):
+            part_id = part.get("DeviceIdentifier", "")
+            size_bytes = part.get("Size", 0)
+            partitions.append(
+                {
+                    "name": part_id,
+                    "path": f"/dev/{part_id}",
+                    "size_bytes": size_bytes,
+                    "size_gb": round(size_bytes / 1_073_741_824, 2),
+                    "mountpoint": part.get("MountPoint", ""),
+                    "filesystem": part.get("Content", ""),
+                }
+            )
     return partitions
 
 
