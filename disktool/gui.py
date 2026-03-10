@@ -481,6 +481,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             ("Flash",    "flash"),
             ("Clone",    "clone"),
             ("Verify",   "verify"),
+            ("Format",   "format"),
             ("Erase",    "erase"),
             ("Activity", "activity"),
         ]:
@@ -598,7 +599,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         )
         tv.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 6))
         self._tabview = tv
-        for tab in ("Backup", "Restore", "Flash", "Clone", "Verify", "Erase", "Activity"):
+        for tab in ("Backup", "Restore", "Flash", "Clone", "Verify", "Format", "Erase", "Activity"):
             tv.add(tab)
         tv.set("Backup")
         self._build_backup_tab(tv.tab("Backup"))
@@ -606,6 +607,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._build_flash_tab(tv.tab("Flash"))
         self._build_clone_tab(tv.tab("Clone"))
         self._build_verify_tab(tv.tab("Verify"))
+        self._build_format_tab(tv.tab("Format"))
         self._build_erase_tab(tv.tab("Erase"))
         self._build_activity_tab(tv.tab("Activity"))
 
@@ -846,6 +848,69 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._copy_hash_btn.pack(side="left", padx=(8, 0))
         self._last_digest: Optional[str] = None
 
+    def _build_format_tab(self, tab: Any) -> None:
+        from disktool.core.format import filesystem_label, list_supported_filesystems
+
+        self._section_title(tab, "Format a Drive / Partition")
+        self._divider(tab)
+        self._form_row(tab, "Target device:", "_format_dst", "/dev/sdb")
+        self._divider(tab)
+
+        # File-system selector row
+        fs_row = ctk.CTkFrame(tab, fg_color="transparent")
+        fs_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            fs_row, text="File system:", width=150, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+
+        supported = list_supported_filesystems()
+        fs_display = [filesystem_label(fs) for fs in supported]
+        self._format_fs_map: dict[str, str] = dict(zip(fs_display, supported))
+
+        self._format_fs_var = tk.StringVar(value=fs_display[0] if fs_display else "")
+        self._format_fs_menu = ctk.CTkOptionMenu(
+            fs_row,
+            values=fs_display,
+            variable=self._format_fs_var,
+            font=ctk.CTkFont(size=12),
+            width=140,
+        )
+        self._format_fs_menu.pack(side="left", padx=(4, 8))
+
+        # Volume label row
+        label_row = ctk.CTkFrame(tab, fg_color="transparent")
+        label_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            label_row, text="Volume label:", width=150, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._format_label_entry = ctk.CTkEntry(
+            label_row, placeholder_text="DISK", width=160,
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+            fg_color=P("card2"), border_color=P("border"),
+        )
+        self._format_label_entry.pack(side="left", padx=(4, 0))
+
+        self._divider(tab)
+
+        opt = ctk.CTkFrame(tab, fg_color="transparent")
+        opt.pack(fill="x", padx=16, pady=2)
+        self._format_dry_run = ctk.CTkCheckBox(
+            opt, text="Dry run (simulate, no write)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._format_dry_run.pack(side="left", padx=(0, 20))
+
+        self._divider(tab)
+        self._warn_box(tab, "⚠  All data on the target device will be permanently destroyed.")
+        ctk.CTkButton(
+            tab, text="Format Drive",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("danger"), hover_color="#b91c1c",
+            height=38, command=self._start_format,
+        ).pack(padx=16, pady=(4, 14), anchor="w")
+
     def _build_erase_tab(self, tab: Any) -> None:
         self._section_title(tab, "Securely Erase a Drive")
         self._divider(tab)
@@ -996,6 +1061,9 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         elif current == "Erase":
             self._erase_dst.delete(0, "end")
             self._erase_dst.insert(0, path)
+        elif current == "Format":
+            self._format_dst.delete(0, "end")
+            self._format_dst.insert(0, path)
         self._set_status(f"Selected: {path}  {sg:.1f} GB  {model}")
         self._log(f"Drive selected: {path}  ({sg:.1f} GB  {model}  {usb})")
 
@@ -1083,6 +1151,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             "flash":    "Flash",
             "clone":    "Clone",
             "verify":   "Verify",
+            "format":   "Format",
             "erase":    "Erase",
             "activity": "Activity",
         }
@@ -1461,6 +1530,60 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
                     dlg.finish(f"Error: {err}", success=False)
                     messagebox.showerror("Erase Failed", err)
                     self._log(f"Erase ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_format(self) -> None:
+        dst = self._format_dst.get().strip()
+        fs_display = self._format_fs_var.get()
+        fs = self._format_fs_map.get(fs_display, fs_display.lower())
+        label = self._format_label_entry.get().strip() or "DISK"
+        dry = self._format_dry_run.get() == 1
+        if not dst:
+            messagebox.showerror("Missing input", "Please enter the target device path.")
+            return
+        info = next((d for d in self._drives if d.get("path") == dst), None)
+        if info and info.get("is_system"):
+            messagebox.showerror(
+                "System Disk Blocked",
+                f"{dst} is a system disk. Formatting system disks is blocked for safety.",
+            )
+            return
+        if not dry:
+            sg    = info.get("size_gb", "?") if info else "?"
+            model = info.get("model", "unknown") if info else "unknown"
+            if not ask_confirm(
+                self,
+                f"You are about to FORMAT  {sg} GB  {model}  ({dst})\n"
+                f"as {fs_display} with label '{label}'.\n\n"
+                "All data will be permanently and irrecoverably destroyed.",
+            ):
+                return
+        self._log(f"Format: {dst} as {fs_display} label={label!r}" + (" [dry-run]" if dry else ""))
+        self._set_status("Format in progress...")
+        dlg = ProgressDialog(self, f"Format {dst}")
+
+        def _worker() -> None:
+            from disktool.core.format import format_disk
+            try:
+                format_disk(dst, fs, label=label, dry_run=dry)
+                def _ok() -> None:
+                    dlg.finish(
+                        f"Format complete!  {dst} is now {fs_display}.",
+                        success=True,
+                    )
+                    self._log(f"Format finished OK: {dst} → {fs_display}")
+                    self._set_status("Format complete.")
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("format error: %s", exc)
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Format Failed", err)
+                    self._log(f"Format ERROR: {err}")
                     self._set_status(f"Error: {err}")
                 self.after(0, _err)
 
