@@ -757,5 +757,273 @@ def cmd_erase(
         sys.exit(2)
 
 
+# ---------------------------------------------------------------------------
+# benchmark
+# ---------------------------------------------------------------------------
+
+@main.command("benchmark")
+@click.argument("device")
+@click.option("--size", "size_mb", default=64, show_default=True, type=click.IntRange(1, 4096),
+              help="Amount of data to read/write per test phase (MB).")
+@click.option("--block-size", "block_size_mb", default=4, show_default=True,
+              type=click.IntRange(1, 64),
+              help="I/O block size in megabytes.")
+@click.option("--write", "do_write", is_flag=True, default=False,
+              help="Also run a sequential write benchmark.")
+@click.option("--read-only", "read_only", is_flag=True, default=False,
+              help="Skip the read benchmark (only meaningful with --write).")
+@click.pass_context
+def cmd_benchmark(
+    ctx: click.Context,
+    device: str,
+    size_mb: int,
+    block_size_mb: int,
+    do_write: bool,
+    read_only: bool,
+) -> None:
+    """Measure sequential read (and optionally write) throughput of DEVICE.
+
+    DEVICE can be a block device path or a directory (for write tests).
+
+    Examples:
+
+        disktool benchmark /dev/sdb
+
+        disktool benchmark /dev/sdb --size 128 --write
+
+        disktool benchmark /tmp --write --read-only
+    """
+    from disktool.core.benchmark import benchmark_read, benchmark_write
+
+    do_read = not read_only
+
+    if not do_read and not do_write:
+        console.print("[bold red]Error:[/bold red] Nothing to do. "
+                      "Pass [bold]--write[/bold] or remove [bold]--read-only[/bold].")
+        sys.exit(1)
+
+    console.print(
+        f"\n[bold cyan]Disk Benchmark[/bold cyan]  "
+        f"[dim]{device}[/dim]  "
+        f"size=[bold]{size_mb} MB[/bold]  block=[bold]{block_size_mb} MB[/bold]\n"
+    )
+
+    results: dict[str, dict] = {}
+
+    if do_read:
+        with _make_progress() as progress:
+            task_id = progress.add_task(f"Read  {device}", total=size_mb * 1024 * 1024)
+
+            def _read_progress(done: int, total: int, speed: float) -> None:
+                progress.update(task_id, completed=done, total=total)
+
+            try:
+                results["read"] = benchmark_read(
+                    device,
+                    size_mb=size_mb,
+                    block_size_mb=block_size_mb,
+                    progress_callback=_read_progress,
+                )
+            except FileNotFoundError as exc:
+                console.print(f"\n[bold red]Error:[/bold red] {exc}")
+                sys.exit(1)
+            except PermissionError:
+                console.print("\n[bold red]Permission denied.[/bold red] Try running as root/Administrator.")
+                sys.exit(1)
+            except OSError as exc:
+                console.print(f"\n[bold red]Read error:[/bold red] {exc}")
+                sys.exit(1)
+
+    if do_write:
+        with _make_progress() as progress:
+            task_id = progress.add_task(f"Write {device}", total=size_mb * 1024 * 1024)
+
+            def _write_progress(done: int, total: int, speed: float) -> None:
+                progress.update(task_id, completed=done, total=total)
+
+            try:
+                results["write"] = benchmark_write(
+                    device,
+                    size_mb=size_mb,
+                    block_size_mb=block_size_mb,
+                    progress_callback=_write_progress,
+                )
+            except PermissionError:
+                console.print("\n[bold red]Permission denied.[/bold red] Try running as root/Administrator.")
+                sys.exit(1)
+            except OSError as exc:
+                console.print(f"\n[bold red]Write error:[/bold red] {exc}")
+                sys.exit(1)
+
+    # Summary table
+    table = Table(
+        title="Benchmark Results",
+        show_header=True,
+        header_style="bold cyan",
+        border_style="bright_black",
+    )
+    table.add_column("Operation", style="bold", width=10)
+    table.add_column("Size (MB)", justify="right")
+    table.add_column("Duration (s)", justify="right")
+    table.add_column("Speed (MB/s)", justify="right", style="bold green")
+
+    for op, r in results.items():
+        table.add_row(
+            op.capitalize(),
+            f"{r['size_mb']:.1f}",
+            f"{r['duration_s']:.3f}",
+            f"{r['speed_mb_s']:.2f}",
+        )
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+# partition
+# ---------------------------------------------------------------------------
+
+@main.command("partition")
+@click.argument("device")
+@click.argument("scheme", metavar="SCHEME")
+@click.option(
+    "--add", "partitions", multiple=True, metavar="SIZE[:FS[:LABEL]]",
+    help=(
+        "Add a partition after creating the table. "
+        "SIZE is a percentage (50%) or size with unit (8G, 512M). "
+        "Optional FS sets the partition type hint (fat32, ext4, ntfs, …). "
+        "Optional LABEL sets the partition name. "
+        "Repeat to add multiple partitions."
+    ),
+)
+@click.option("--dry-run", is_flag=True, default=False, help="Simulate without writing.")
+@click.option("--dangerous", is_flag=True, default=False, help="Allow partitioning system disks.")
+@click.pass_context
+def cmd_partition(
+    ctx: click.Context,
+    device: str,
+    scheme: str,
+    partitions: tuple[str, ...],
+    dry_run: bool,
+    dangerous: bool,
+) -> None:
+    """Create a new MBR or GPT partition table on DEVICE.
+
+    SCHEME must be 'mbr' or 'gpt'.
+
+    Use --add to define partitions immediately after creating the table.
+    Each --add value is SIZE[:FS[:LABEL]], for example:
+
+    \b
+        --add 100%                      full-disk, no type hint
+        --add 8G:fat32:BOOT             8 GB FAT32 partition named BOOT
+        --add 50%:ext4 --add 50%:ext4   two equal ext4 partitions
+
+    After partitioning, use [bold]disktool format[/bold] to write a file system.
+
+    Examples:
+
+        disktool partition /dev/sdb gpt
+
+        disktool partition /dev/sdb mbr --add 100%:fat32
+
+        disktool partition /dev/sdb gpt --add 512M:fat32:EFI --add 100%:ext4:ROOT
+    """
+    from disktool.core.disk import get_drives
+    from disktool.core.partition import (
+        add_partition,
+        create_partition_table,
+        list_partition_schemes,
+    )
+
+    supported = list_partition_schemes()
+    if scheme.lower() not in supported:
+        console.print(
+            f"[bold red]Error:[/bold red] Unsupported scheme {scheme!r}. "
+            f"Supported: {', '.join(supported)}"
+        )
+        sys.exit(1)
+
+    drives = get_drives()
+    dest_info = next((d for d in drives if d.get("path") == device), None)
+
+    if dest_info and dest_info.get("is_system") and not dangerous:
+        console.print(
+            f"[bold red]Error:[/bold red] {device} is a system disk. "
+            "Use [bold]--dangerous[/bold] to override this safety check."
+        )
+        sys.exit(1)
+
+    size_gb = dest_info.get("size_gb", "?") if dest_info else "?"
+    model = dest_info.get("model", "unknown device") if dest_info else "unknown device"
+
+    if not dry_run:
+        part_desc = ""
+        if partitions:
+            part_desc = "\n  Partitions: " + "  |  ".join(partitions)
+        _require_confirmation(
+            f"About to [red]REPARTITION[/red] [bold]{size_gb} GB {model}[/bold] ({device})\n"
+            f"as [bold cyan]{scheme.upper()}[/bold cyan].{part_desc}\n\n"
+            "All data on the target will be permanently destroyed."
+        )
+
+    try:
+        create_partition_table(device, scheme, dry_run=dry_run)
+    except ValueError as exc:
+        console.print(f"\n[bold red]Error:[/bold red] {exc}")
+        sys.exit(1)
+    except FileNotFoundError as exc:
+        console.print(f"\n[bold red]Partitioning tool not found:[/bold red] {exc}")
+        sys.exit(1)
+    except OSError as exc:
+        console.print(f"\n[bold red]Partition failed:[/bold red] {exc}")
+        sys.exit(1)
+    except PermissionError:
+        console.print("\n[bold red]Permission denied.[/bold red] Try running as root/Administrator.")
+        sys.exit(1)
+
+    if dry_run:
+        console.print(f"[yellow][DRY RUN] Would create {scheme.upper()} table on {device}.[/yellow]")
+    else:
+        console.print(
+            f"\n[bold green]✓ {scheme.upper()} partition table created on {device}.[/bold green]"
+        )
+
+    # Add any requested partitions
+    for spec in partitions:
+        parts = spec.split(":", 2)
+        p_size = parts[0].strip()
+        p_fs = parts[1].strip() if len(parts) > 1 else None
+        p_label = parts[2].strip() if len(parts) > 2 else None
+
+        try:
+            add_partition(device, size=p_size, filesystem=p_fs, label=p_label, dry_run=dry_run)
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            console.print(f"[bold red]Failed to add partition {spec!r}:[/bold red] {exc}")
+            sys.exit(1)
+        except PermissionError:
+            console.print("\n[bold red]Permission denied.[/bold red] Try running as root/Administrator.")
+            sys.exit(1)
+
+        if dry_run:
+            label_str = f" label={p_label!r}" if p_label else ""
+            fs_str = f" type={p_fs}" if p_fs else ""
+            console.print(
+                f"[yellow][DRY RUN] Would add partition: size={p_size}{fs_str}{label_str}[/yellow]"
+            )
+        else:
+            fs_str = f" ({p_fs})" if p_fs else ""
+            console.print(
+                f"  [green]•[/green] Partition added: [bold]{p_size}[/bold]{fs_str}"
+                + (f"  label=[bold]{p_label}[/bold]" if p_label else "")
+            )
+
+    if not dry_run and partitions:
+        console.print(
+            "\n[dim]Tip: run [bold]disktool format[/bold] to write a file system to each partition.[/dim]"
+        )
+
+
 if __name__ == "__main__":
     main()
