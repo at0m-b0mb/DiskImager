@@ -1,0 +1,107 @@
+name: Build Executables
+
+# Build single-file standalone executables for every push/PR, and attach
+# them to a GitHub Release when a version tag (v*) is pushed.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write   # needed to upload release assets
+
+jobs:
+  build:
+    name: Build – ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ─── Linux (x86-64) ────────────────────────────────────────────────
+          - os: ubuntu-latest
+            asset_name: disktool-linux-x86_64
+            exe_path: dist/disktool
+
+          # ─── macOS (Intel) ─────────────────────────────────────────────────
+          - os: macos-13
+            asset_name: disktool-macos-x86_64
+            exe_path: dist/disktool
+
+          # ─── macOS (Apple Silicon) ─────────────────────────────────────────
+          - os: macos-14
+            asset_name: disktool-macos-arm64
+            exe_path: dist/disktool
+
+          # ─── Windows (x86-64) ──────────────────────────────────────────────
+          - os: windows-latest
+            asset_name: disktool-windows-x86_64.exe
+            exe_path: dist/disktool.exe
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python ──────────────────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ── 3. System dependencies (Linux only – Tkinter) ──────────────────────
+      - name: Install Tkinter (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y python3-tk
+
+      # ── 4. Python dependencies ─────────────────────────────────────────────
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller>=6.0
+
+      # Optional: install lz4 / zstandard so compress back-ends are bundled
+      - name: Install optional compression libraries
+        run: pip install lz4 zstandard
+        continue-on-error: true
+
+      # ── 5. Build the executable ────────────────────────────────────────────
+      - name: Build with PyInstaller
+        run: pyinstaller DiskImager.spec
+
+      # ── 6. Smoke-test: executable must respond to --help ───────────────────
+      - name: Smoke-test (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: ${{ matrix.exe_path }} --help
+
+      - name: Smoke-test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ${{ matrix.exe_path }} --help
+
+      # ── 7. Rename to platform-specific asset name ──────────────────────────
+      - name: Rename executable
+        shell: bash
+        run: |
+          mv "${{ matrix.exe_path }}" "dist/${{ matrix.asset_name }}"
+
+      # ── 8. Upload as build artifact (available on every run) ───────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+      # ── 9. Attach to GitHub Release (tag pushes only) ──────────────────────
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.asset_name }}
+          generate_release_notes: true

@@ -33,6 +33,7 @@ Whether you want to clone a USB drive, save a bootable ISO onto a flash drive, c
 ## Table of Contents
 
 - [Features](#features)
+- [Download Pre-built Executable](#download-pre-built-executable)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [GUI Guide](#gui-guide)
@@ -115,6 +116,51 @@ Some features require third-party packages that are not included by default:
 | `lz4` | lz4 compression in `compress` | `pip install lz4` |
 | `zstandard` | zstd compression in `compress` | `pip install zstandard` |
 | `pywin32` | Full hardware enumeration on Windows | `pip install pywin32` |
+
+---
+
+## 📦 Download Pre-built Executable
+
+**No Python. No pip. No dependencies.** Just download and run.
+
+Pre-built single-file executables are automatically built by GitHub Actions for every release:
+
+| Platform | Download |
+|----------|----------|
+| 🐧 Linux (x86-64) | [`disktool-linux-x86_64`](https://github.com/at0m-b0mb/DiskImager/releases/latest/download/disktool-linux-x86_64) |
+| 🍎 macOS (Intel x86-64) | [`disktool-macos-x86_64`](https://github.com/at0m-b0mb/DiskImager/releases/latest/download/disktool-macos-x86_64) |
+| 🍎 macOS (Apple Silicon arm64) | [`disktool-macos-arm64`](https://github.com/at0m-b0mb/DiskImager/releases/latest/download/disktool-macos-arm64) |
+| 🪟 Windows (x86-64) | [`disktool-windows-x86_64.exe`](https://github.com/at0m-b0mb/DiskImager/releases/latest/download/disktool-windows-x86_64.exe) |
+
+You can also find all executables on the [Releases page](https://github.com/at0m-b0mb/DiskImager/releases).
+
+### Usage after download
+
+**Linux / macOS:**
+
+```bash
+# Make executable (only needed once)
+chmod +x disktool-linux-x86_64
+
+# Run (same syntax as python main.py …)
+sudo ./disktool-linux-x86_64 list
+sudo ./disktool-linux-x86_64 backup /dev/sdb my-usb.img
+./disktool-linux-x86_64 gui
+```
+
+**Windows (Command Prompt / PowerShell – run as Administrator):**
+
+```powershell
+disktool-windows-x86_64.exe list
+disktool-windows-x86_64.exe backup \\.\PhysicalDrive1 my-usb.img
+disktool-windows-x86_64.exe gui
+```
+
+> **macOS Gatekeeper notice:** The binary is not notarized. On first run macOS will block it.
+> Open **System Settings → Privacy & Security** and click **Allow Anyway**, or run:
+> ```bash
+> xattr -dr com.apple.quarantine disktool-macos-*
+> ```
 
 ---
 
@@ -716,14 +762,56 @@ DiskImager/
 
 ## Building a Standalone Executable
 
+DiskImager ships with a `DiskImager.spec` PyInstaller spec that produces a **single self-contained binary** — no Python or pip required on the target machine.
+
+### Quick build
+
 ```bash
+# Install PyInstaller
 pip install pyinstaller
+
+# Build the single-file executable
 pyinstaller DiskImager.spec
 ```
 
-Output: `dist/disktool` (Linux/macOS) or `dist/disktool.exe` (Windows).
+Output:
 
-The spec file includes all platform modules and hides the console window on Windows when using `--windowed`.
+| Platform | Path |
+|----------|------|
+| Linux / macOS | `dist/disktool` |
+| Windows | `dist/disktool.exe` |
+
+### What the spec bundles
+
+The spec automatically includes:
+- All DiskImager modules (`cli`, `gui`, `core.*`, all three platform backends)
+- `customtkinter` theme assets (GUI)
+- `rich`, `click`, `psutil`, `tqdm`, `cryptography`
+- Optional `lz4` / `zstandard` back-ends (if installed at build time)
+- All three platform backends so the same binary runs everywhere
+
+### Automated CI builds (GitHub Actions)
+
+Every push and pull request triggers the **Build Executables** workflow
+(`.github/workflows/build.yml`), which builds on:
+
+- `ubuntu-latest` → `disktool-linux-x86_64`
+- `macos-13` (Intel) → `disktool-macos-x86_64`
+- `macos-14` (Apple Silicon) → `disktool-macos-arm64`
+- `windows-latest` → `disktool-windows-x86_64.exe`
+
+The workflow smoke-tests each binary with `disktool --help` before uploading.
+When you push a **`v*` tag**, the workflow automatically creates a GitHub Release
+and attaches all four executables as downloadable assets.
+
+### Releasing a new version
+
+```bash
+# Bump version in disktool/__init__.py and pyproject.toml, then:
+git tag v1.2.0
+git push origin v1.2.0
+# GitHub Actions builds and publishes the release automatically
+```
 
 ---
 
