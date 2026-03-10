@@ -154,6 +154,34 @@ class TestCLIGui:
         assert result.exit_code == 0
         assert "graphical" in result.output.lower() or "gui" in result.output.lower()
 
+    def test_start_verify_method_defined(self) -> None:
+        """DiskImagerApp must define _start_verify as a proper method.
+
+        Regression test for the bug where the ``def _start_verify(self)`` header
+        was accidentally omitted, causing the GUI to crash on launch with:
+            'DiskImagerApp' object has no attribute '_start_verify'
+        """
+        import ast
+        from pathlib import Path as _Path
+
+        gui_path = _Path(__file__).parent.parent / "disktool" / "gui.py"
+        tree = ast.parse(gui_path.read_text())
+
+        start_methods: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "DiskImagerApp":
+                # Use node.body to get only direct class members (not nested funcs)
+                start_methods = [
+                    n.name
+                    for n in node.body
+                    if isinstance(n, ast.FunctionDef) and n.name.startswith("_start")
+                ]
+                break
+
+        assert "_start_verify" in start_methods, (
+            f"DiskImagerApp is missing _start_verify; found: {start_methods}"
+        )
+
 
 import builtins as _builtins
 

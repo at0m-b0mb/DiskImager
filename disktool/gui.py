@@ -1320,7 +1320,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._log(f"Clone: {src} -> {dst}" + (" [dry-run]" if dry else ""))
         self._run_clone_op(src, dst, dry_run=dry, verify=not skip_verify)
 
-
+    def _start_verify(self) -> None:
         src      = self._verify_src.get().strip()
         expected = self._verify_hash.get().strip() or None
         if not src:
