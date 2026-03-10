@@ -104,7 +104,7 @@ class TestCreatePartitionTableValidation:
             create_partition_table("/dev/sdb", "zfs_table")
 
     def test_unsupported_platform_raises(self) -> None:
-        with patch("sys.platform", "freebsd13"):
+        with patch("sys.platform", "unsupported_os"):
             with pytest.raises(ValueError, match="Unsupported platform"):
                 create_partition_table("/dev/da0", "gpt")
 
@@ -255,7 +255,7 @@ class TestAddPartitionLinux:
         assert "parted" in cmd
 
     def test_unsupported_platform(self) -> None:
-        with patch("sys.platform", "freebsd13"):
+        with patch("sys.platform", "unsupported_os"):
             with pytest.raises(ValueError, match="Unsupported platform"):
                 add_partition("/dev/da0", size="100%")
 

@@ -5,11 +5,62 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1 * 1024 * 1024  # 1 MiB
+
+#: Algorithms always guaranteed by :mod:`hashlib` on all supported platforms.
+COMMON_ALGORITHMS: list[str] = ["md5", "sha1", "sha256", "sha512"]
+
+
+def multi_hash(
+    path: str | Path,
+    algorithms: list[str] | None = None,
+    progress_callback: Callable[[int], None] | None = None,
+) -> dict[str, str]:
+    """Compute multiple hash digests in a **single read pass**.
+
+    Args:
+        path:       File (or block device) to hash.
+        algorithms: List of algorithm names accepted by :mod:`hashlib`.
+                    Defaults to :data:`COMMON_ALGORITHMS`
+                    (``["md5", "sha1", "sha256", "sha512"]``).
+        progress_callback: Optional callable receiving cumulative bytes read.
+
+    Returns:
+        Dict mapping each algorithm name to its lowercase hex digest.
+
+    Raises:
+        FileNotFoundError: If *path* does not exist.
+        ValueError:        If any algorithm is not supported by :mod:`hashlib`.
+    """
+    if algorithms is None:
+        algorithms = list(COMMON_ALGORITHMS)
+
+    # Validate all algorithms up-front so we fail fast.
+    hashers: dict[str, Any] = {}
+    for algo in algorithms:
+        try:
+            hashers[algo] = hashlib.new(algo)
+        except ValueError as exc:
+            raise ValueError(f"Unsupported hash algorithm {algo!r}: {exc}") from exc
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    total = 0
+    with open(path, "rb") as fh:
+        while chunk := fh.read(CHUNK_SIZE):
+            for h in hashers.values():
+                h.update(chunk)
+            total += len(chunk)
+            if progress_callback:
+                progress_callback(total)
+
+    return {algo: h.hexdigest() for algo, h in hashers.items()}
 
 
 def hash_file(

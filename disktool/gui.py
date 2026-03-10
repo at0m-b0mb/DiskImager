@@ -485,6 +485,9 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             ("Erase",    "erase"),
             ("Benchmark","benchmark"),
             ("Partition","partition"),
+            ("Compress", "compress"),
+            ("Checksum", "checksum"),
+            ("Mount",    "mount"),
             ("Activity", "activity"),
         ]:
             btn = _NavButton(sb, label, tab, self._switch_tab)
@@ -601,7 +604,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         )
         tv.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 6))
         self._tabview = tv
-        for tab in ("Backup", "Restore", "Flash", "Clone", "Verify", "Format", "Erase", "Benchmark", "Partition", "Activity"):
+        for tab in ("Backup", "Restore", "Flash", "Clone", "Verify", "Format", "Erase", "Benchmark", "Partition", "Compress", "Checksum", "Mount", "Activity"):
             tv.add(tab)
         tv.set("Backup")
         self._build_backup_tab(tv.tab("Backup"))
@@ -613,6 +616,9 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._build_erase_tab(tv.tab("Erase"))
         self._build_benchmark_tab(tv.tab("Benchmark"))
         self._build_partition_tab(tv.tab("Partition"))
+        self._build_compress_tab(tv.tab("Compress"))
+        self._build_checksum_tab(tv.tab("Checksum"))
+        self._build_mount_tab(tv.tab("Mount"))
         self._build_activity_tab(tv.tab("Activity"))
 
     def _build_statusbar(self) -> None:
@@ -1099,6 +1105,170 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             height=38, command=self._start_partition,
         ).pack(padx=16, pady=(4, 14), anchor="w")
 
+    def _build_compress_tab(self, tab: Any) -> None:
+        from disktool.core.compress import list_supported_algorithms
+
+        self._section_title(tab, "Compress / Decompress Image")
+        self._divider(tab)
+        self._form_row(tab, "Image file:", "_compress_src", "/path/to/image.img")
+        self._divider(tab)
+
+        alg_row = ctk.CTkFrame(tab, fg_color="transparent")
+        alg_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            alg_row, text="Algorithm:", width=120, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        supported = list_supported_algorithms()
+        self._compress_alg_var = tk.StringVar(value="gzip")
+        ctk.CTkOptionMenu(
+            alg_row,
+            values=supported,
+            variable=self._compress_alg_var,
+            font=ctk.CTkFont(size=12),
+            width=100,
+        ).pack(side="left", padx=(4, 16))
+
+        ctk.CTkLabel(
+            alg_row, text="Level:", width=50, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._compress_level_var = tk.StringVar(value="(default)")
+        ctk.CTkOptionMenu(
+            alg_row,
+            values=["(default)"] + [str(i) for i in range(1, 10)],
+            variable=self._compress_level_var,
+            font=ctk.CTkFont(size=12),
+            width=90,
+        ).pack(side="left", padx=(4, 0))
+
+        self._divider(tab)
+        opt_row = ctk.CTkFrame(tab, fg_color="transparent")
+        opt_row.pack(fill="x", padx=16, pady=2)
+        self._compress_decompress = ctk.CTkCheckBox(
+            opt_row, text="Decompress (auto-detect algorithm from extension)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._compress_decompress.pack(side="left")
+
+        self._divider(tab)
+        self._compress_result_lbl = ctk.CTkLabel(
+            tab, text="",
+            font=ctk.CTkFont(size=12), text_color=P("text_muted"), anchor="w",
+            wraplength=580,
+        )
+        self._compress_result_lbl.pack(fill="x", padx=16, pady=(4, 2))
+        ctk.CTkButton(
+            tab, text="Run",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("accent"), hover_color="#196127",
+            height=38, command=self._start_compress,
+        ).pack(padx=16, pady=(8, 14), anchor="w")
+
+    def _build_checksum_tab(self, tab: Any) -> None:
+        self._section_title(tab, "Multi-Algorithm Checksum")
+        self._divider(tab)
+        self._form_row(tab, "File / device:", "_checksum_src", "/path/to/image.img")
+        self._divider(tab)
+
+        algo_row = ctk.CTkFrame(tab, fg_color="transparent")
+        algo_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            algo_row, text="Algorithms:", width=120, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._checksum_md5    = ctk.CTkCheckBox(algo_row, text="MD5",    font=ctk.CTkFont(size=12), text_color=P("text"))
+        self._checksum_sha1   = ctk.CTkCheckBox(algo_row, text="SHA-1",  font=ctk.CTkFont(size=12), text_color=P("text"))
+        self._checksum_sha256 = ctk.CTkCheckBox(algo_row, text="SHA-256",font=ctk.CTkFont(size=12), text_color=P("text"))
+        self._checksum_sha512 = ctk.CTkCheckBox(algo_row, text="SHA-512",font=ctk.CTkFont(size=12), text_color=P("text"))
+        for cb in (self._checksum_md5, self._checksum_sha1,
+                   self._checksum_sha256, self._checksum_sha512):
+            cb.pack(side="left", padx=(0, 14))
+            cb.select()
+
+        self._divider(tab)
+        save_row = ctk.CTkFrame(tab, fg_color="transparent")
+        save_row.pack(fill="x", padx=16, pady=2)
+        self._checksum_save = ctk.CTkCheckBox(
+            save_row, text="Save sidecar files (.md5 / .sha256 / …)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._checksum_save.pack(side="left")
+
+        self._divider(tab)
+        self._checksum_result_frame = ctk.CTkFrame(tab, fg_color=P("card2"), corner_radius=6)
+        self._checksum_result_frame.pack(fill="x", padx=16, pady=(4, 2))
+        self._checksum_result_lbl = ctk.CTkLabel(
+            self._checksum_result_frame,
+            text="Results will appear here.",
+            font=ctk.CTkFont(family="monospace", size=11),
+            text_color=P("text_muted"), anchor="w", justify="left",
+            wraplength=560,
+        )
+        self._checksum_result_lbl.pack(fill="x", padx=10, pady=8)
+
+        ctk.CTkButton(
+            tab, text="Compute Checksums",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("accent"), hover_color="#196127",
+            height=38, command=self._start_checksum,
+        ).pack(padx=16, pady=(8, 14), anchor="w")
+
+    def _build_mount_tab(self, tab: Any) -> None:
+        self._section_title(tab, "Mount / Unmount Disk Image")
+        self._divider(tab)
+        self._form_row(tab, "Image file:", "_mount_image", "/path/to/image.img")
+        self._divider(tab)
+
+        mp_row = ctk.CTkFrame(tab, fg_color="transparent")
+        mp_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            mp_row, text="Mountpoint:", width=120, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._mount_point_entry = ctk.CTkEntry(
+            mp_row,
+            placeholder_text="(auto – a temp dir is created)",
+            width=300,
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+            fg_color=P("card2"), border_color=P("border"),
+        )
+        self._mount_point_entry.pack(side="left", padx=(4, 0))
+
+        self._divider(tab)
+        opt_row = ctk.CTkFrame(tab, fg_color="transparent")
+        opt_row.pack(fill="x", padx=16, pady=2)
+        self._mount_dry_run = ctk.CTkCheckBox(
+            opt_row, text="Dry run (simulate, no actual mount)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._mount_dry_run.pack(side="left")
+
+        self._divider(tab)
+        self._mount_info_lbl = ctk.CTkLabel(
+            tab,
+            text="",
+            font=ctk.CTkFont(size=12), text_color=P("text_muted"), anchor="w",
+            wraplength=580,
+        )
+        self._mount_info_lbl.pack(fill="x", padx=16, pady=(4, 2))
+
+        btn_row = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(8, 14))
+        ctk.CTkButton(
+            btn_row, text="Mount Image",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("accent"), hover_color="#196127",
+            height=38, command=self._start_mount,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            btn_row, text="Unmount",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("card2"), hover_color=P("hover"),
+            text_color=P("text"),
+            height=38, command=self._start_unmount,
+        ).pack(side="left")
+
     def _build_activity_tab(self, tab: Any) -> None:
         self._section_title(tab, "Activity Log")
         self._divider(tab)
@@ -1216,6 +1386,15 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         elif current == "Partition":
             self._part_dev.delete(0, "end")
             self._part_dev.insert(0, path)
+        elif current == "Compress":
+            self._compress_src.delete(0, "end")
+            self._compress_src.insert(0, path)
+        elif current == "Checksum":
+            self._checksum_src.delete(0, "end")
+            self._checksum_src.insert(0, path)
+        elif current == "Mount":
+            self._mount_image.delete(0, "end")
+            self._mount_image.insert(0, path)
         self._set_status(f"Selected: {path}  {sg:.1f} GB  {model}")
         self._log(f"Drive selected: {path}  ({sg:.1f} GB  {model}  {usb})")
 
@@ -1307,6 +1486,9 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             "erase":     "Erase",
             "benchmark": "Benchmark",
             "partition": "Partition",
+            "compress":  "Compress",
+            "checksum":  "Checksum",
+            "mount":     "Mount",
             "activity":  "Activity",
         }
         if tab_name in tab_map:
@@ -1834,6 +2016,211 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
                     dlg.finish(f"Error: {err}", success=False)
                     messagebox.showerror("Partition Failed", err)
                     self._log(f"Partition ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_compress(self) -> None:
+        src = self._compress_src.get().strip()
+        if not src:
+            messagebox.showerror("Missing input", "Please enter the image file path.")
+            return
+        algorithm = self._compress_alg_var.get()
+        level_str = self._compress_level_var.get()
+        level = int(level_str) if level_str.isdigit() else None
+        decompress = self._compress_decompress.get() == 1
+
+        self._log(
+            f"{'Decompress' if decompress else 'Compress'}: {src}"
+            + (f"  algorithm={algorithm}" if not decompress else "")
+        )
+        self._set_status(f"{'Decompressing' if decompress else 'Compressing'}…")
+        self._compress_result_lbl.configure(text="Running…", text_color=P("text_muted"))
+        dlg = ProgressDialog(self, f"{'Decompress' if decompress else 'Compress'} {src}")
+
+        def _progress(done: int, total: int, speed: float) -> None:
+            try:
+                self.after(0, lambda: dlg.update_progress(done, total, speed))
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            from disktool.core.compress import compress_image, decompress_image
+            from pathlib import Path as _Path
+            try:
+                if decompress:
+                    out_path = decompress_image(src, progress_callback=_progress)
+                    summary = f"Decompressed → {out_path}"
+                else:
+                    out_path = compress_image(
+                        src, algorithm=algorithm, level=level,
+                        progress_callback=_progress,
+                    )
+                    in_size = _Path(src).stat().st_size
+                    out_size = out_path.stat().st_size
+                    ratio = (1 - out_size / in_size) * 100 if in_size > 0 else 0
+                    summary = f"Compressed → {out_path}  (saved {ratio:.1f}%)"
+
+                def _ok() -> None:
+                    dlg.finish(summary, success=True)
+                    self._compress_result_lbl.configure(text=summary, text_color=P("success"))
+                    self._log(f"Compress OK: {summary}")
+                    self._set_status("Complete.")
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("compress error: %s", exc)
+
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Compress Failed", err)
+                    self._compress_result_lbl.configure(text=f"Error: {err}", text_color=P("danger"))
+                    self._log(f"Compress ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_checksum(self) -> None:
+        src = self._checksum_src.get().strip()
+        if not src:
+            messagebox.showerror("Missing input", "Please enter the file/device path.")
+            return
+        algo_map = {
+            "md5":    self._checksum_md5.get() == 1,
+            "sha1":   self._checksum_sha1.get() == 1,
+            "sha256": self._checksum_sha256.get() == 1,
+            "sha512": self._checksum_sha512.get() == 1,
+        }
+        algos = [k for k, v in algo_map.items() if v]
+        if not algos:
+            messagebox.showerror("No algorithms", "Select at least one hash algorithm.")
+            return
+        save = self._checksum_save.get() == 1
+
+        self._log(f"Checksum: {src}  algorithms={', '.join(algos)}")
+        self._set_status("Computing checksums…")
+        self._checksum_result_lbl.configure(text="Computing…", text_color=P("text_muted"))
+        dlg = ProgressDialog(self, f"Checksum {src}")
+
+        def _progress(done: int) -> None:
+            try:
+                from pathlib import Path as _Path
+                try:
+                    total = _Path(src).stat().st_size
+                except OSError:
+                    total = done
+                self.after(0, lambda: dlg.update_progress(done, total, 0))
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            from disktool.core.verify import multi_hash, write_sidecar
+            from pathlib import Path as _Path
+            try:
+                digests = multi_hash(src, algorithms=algos, progress_callback=_progress)
+                lines = [f"{algo.upper():<8} {digest}" for algo, digest in digests.items()]
+                summary = "\n".join(lines)
+                if save:
+                    for algo, digest in digests.items():
+                        write_sidecar(_Path(src), digest, algorithm=algo)
+
+                def _ok() -> None:
+                    dlg.finish("Checksums computed.", success=True)
+                    self._checksum_result_lbl.configure(text=summary, text_color=P("text"))
+                    self._log(f"Checksum: {src}\n  " + "\n  ".join(lines))
+                    self._set_status("Checksums complete.")
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("checksum error: %s", exc)
+
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Checksum Failed", err)
+                    self._checksum_result_lbl.configure(text=f"Error: {err}", text_color=P("danger"))
+                    self._log(f"Checksum ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_mount(self) -> None:
+        image = self._mount_image.get().strip()
+        if not image:
+            messagebox.showerror("Missing input", "Please enter the image file path.")
+            return
+        mountpoint = self._mount_point_entry.get().strip() or None
+        dry = self._mount_dry_run.get() == 1
+
+        self._log(f"Mount: {image}" + (f"  at {mountpoint}" if mountpoint else ""))
+        self._set_status("Mounting…")
+        self._mount_info_lbl.configure(text="Mounting…", text_color=P("text_muted"))
+
+        def _worker() -> None:
+            from disktool.core.mount import mount_image
+            try:
+                info = mount_image(image, mountpoint=mountpoint, dry_run=dry)
+                mp = info.get("mountpoint") or "(OS-assigned)"
+                loop = info.get("loop_device") or ""
+                summary = f"{'[DRY RUN] ' if dry else ''}Mounted at {mp}" + (f"  (loop: {loop})" if loop else "")
+
+                def _ok() -> None:
+                    self._mount_info_lbl.configure(text=summary, text_color=P("success"))
+                    self._log(f"Mount OK: {summary}")
+                    self._set_status(f"Mounted at {mp}.")
+                    if not dry:
+                        messagebox.showinfo(
+                            "Mounted",
+                            f"Image mounted at:\n{mp}\n\nUse 'Unmount' when done browsing.",
+                        )
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("mount error: %s", exc)
+
+                def _err() -> None:
+                    self._mount_info_lbl.configure(text=f"Error: {err}", text_color=P("danger"))
+                    messagebox.showerror("Mount Failed", err)
+                    self._log(f"Mount ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_unmount(self) -> None:
+        target = self._mount_image.get().strip()
+        mp_entry = self._mount_point_entry.get().strip()
+        target = mp_entry or target
+        if not target:
+            messagebox.showerror("Missing input", "Enter the image path or mountpoint to unmount.")
+            return
+        dry = self._mount_dry_run.get() == 1
+
+        self._log(f"Unmount: {target}")
+        self._set_status("Unmounting…")
+
+        def _worker() -> None:
+            from disktool.core.mount import unmount_image
+            try:
+                unmount_image(target, dry_run=dry)
+
+                def _ok() -> None:
+                    self._mount_info_lbl.configure(
+                        text=f"{'[DRY RUN] ' if dry else ''}Unmounted {target}.",
+                        text_color=P("success"),
+                    )
+                    self._log(f"Unmount OK: {target}")
+                    self._set_status("Unmounted.")
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("unmount error: %s", exc)
+
+                def _err() -> None:
+                    messagebox.showerror("Unmount Failed", err)
+                    self._log(f"Unmount ERROR: {err}")
                     self._set_status(f"Error: {err}")
                 self.after(0, _err)
 

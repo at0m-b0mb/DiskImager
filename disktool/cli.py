@@ -1025,5 +1025,313 @@ def cmd_partition(
         )
 
 
+# ---------------------------------------------------------------------------
+# compress / decompress
+# ---------------------------------------------------------------------------
+
+@main.command("compress")
+@click.argument("image")
+@click.option(
+    "--algorithm", "-a",
+    default="gzip", show_default=True,
+    type=click.Choice(["gzip", "lz4", "zstd"], case_sensitive=False),
+    help="Compression algorithm.",
+)
+@click.option("--level", default=None, type=click.IntRange(1, 22),
+              help="Compression level (algorithm-specific).  Default: algorithm default.")
+@click.option("--output", "-o", default=None,
+              help="Output path.  Default: IMAGE with algorithm extension appended.")
+@click.option("--decompress", "-d", is_flag=True, default=False,
+              help="Decompress instead of compress.")
+@click.pass_context
+def cmd_compress(
+    ctx: click.Context,
+    image: str,
+    algorithm: str,
+    level: Optional[int],
+    output: Optional[str],
+    decompress: bool,
+) -> None:
+    """Compress or decompress a disk IMAGE.
+
+    Supported algorithms: gzip (always), lz4 (pip install lz4),
+    zstd (pip install zstandard).
+
+    Examples:
+
+        disktool compress backup.img
+
+        disktool compress backup.img --algorithm zstd --level 3
+
+        disktool compress backup.img.gz --decompress
+
+        disktool compress backup.img.lz4 -d -o restored.img
+    """
+    from disktool.core.compress import (
+        compress_image,
+        decompress_image,
+        detect_algorithm,
+        list_supported_algorithms,
+    )
+
+    supported = list_supported_algorithms()
+
+    if decompress:
+        # Auto-detect algorithm from extension
+        detected = detect_algorithm(image)
+        if detected and detected not in supported:
+            console.print(
+                f"[bold red]Error:[/bold red] Algorithm {detected!r} is not available. "
+                f"Install the required package first."
+            )
+            sys.exit(1)
+        if detected is None:
+            console.print(
+                f"[bold red]Error:[/bold red] Cannot detect compression algorithm from "
+                f"extension {Path(image).suffix!r}."
+            )
+            sys.exit(1)
+
+        image_path = Path(image)
+        total_bytes = image_path.stat().st_size if image_path.exists() else 0
+
+        with _make_progress() as progress:
+            task_id = progress.add_task(f"Decompress {image_path.name}", total=total_bytes)
+
+            def _dprogress(done: int, total: int, speed: float) -> None:
+                progress.update(task_id, completed=done, total=total or None)
+
+            try:
+                result_path = decompress_image(image, output=output, progress_callback=_dprogress)
+            except (FileNotFoundError, ValueError, RuntimeError) as exc:
+                console.print(f"\n[bold red]Error:[/bold red] {exc}")
+                sys.exit(1)
+
+        console.print(f"\n[bold green]✓ Decompressed![/bold green]  → [cyan]{result_path}[/cyan]")
+        return
+
+    # Compress
+    algorithm = algorithm.lower()
+    if algorithm not in supported:
+        console.print(
+            f"[bold red]Error:[/bold red] Algorithm {algorithm!r} is not available.\n"
+            f"Available: {', '.join(supported)}\n"
+            f"Install with: pip install {'lz4' if algorithm == 'lz4' else 'zstandard'}"
+        )
+        sys.exit(1)
+
+    image_path = Path(image)
+    if not image_path.exists():
+        console.print(f"[bold red]Error:[/bold red] File not found: {image}")
+        sys.exit(1)
+    total_bytes = image_path.stat().st_size
+
+    with _make_progress() as progress:
+        task_id = progress.add_task(f"Compress {image_path.name} ({algorithm})", total=total_bytes)
+
+        def _cprogress(done: int, total: int, speed: float) -> None:
+            progress.update(task_id, completed=done, total=total or None)
+
+        try:
+            result_path = compress_image(
+                image, algorithm=algorithm, level=level, output=output,
+                progress_callback=_cprogress,
+            )
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            console.print(f"\n[bold red]Error:[/bold red] {exc}")
+            sys.exit(1)
+
+    in_size = total_bytes
+    out_size = result_path.stat().st_size
+    ratio = (1 - out_size / in_size) * 100 if in_size > 0 else 0
+    console.print(f"\n[bold green]✓ Compressed![/bold green]  → [cyan]{result_path}[/cyan]")
+    console.print(
+        f"  Input:  [dim]{in_size:,} bytes[/dim]\n"
+        f"  Output: [dim]{out_size:,} bytes[/dim]\n"
+        f"  Saving: [bold green]{ratio:.1f}%[/bold green]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# checksum
+# ---------------------------------------------------------------------------
+
+@main.command("checksum")
+@click.argument("file")
+@click.option(
+    "--algorithms", "-a",
+    default="md5,sha1,sha256,sha512", show_default=True,
+    help="Comma-separated list of hash algorithms to compute.",
+)
+@click.option("--save", is_flag=True, default=False,
+              help="Write a <FILE>.<algo> sidecar for each algorithm.")
+@click.pass_context
+def cmd_checksum(ctx: click.Context, file: str, algorithms: str, save: bool) -> None:
+    """Compute multiple checksums of FILE in a single read pass.
+
+    Examples:
+
+        disktool checksum backup.img
+
+        disktool checksum backup.img --algorithms sha256,sha512
+
+        disktool checksum backup.img --algorithms md5,sha256 --save
+    """
+    from disktool.core.verify import multi_hash, write_sidecar
+
+    file_path = Path(file)
+    if not file_path.exists():
+        console.print(f"[bold red]Error:[/bold red] File not found: {file}")
+        sys.exit(1)
+
+    algo_list = [a.strip().lower() for a in algorithms.split(",") if a.strip()]
+    if not algo_list:
+        console.print("[bold red]Error:[/bold red] No algorithms specified.")
+        sys.exit(1)
+
+    total_bytes = file_path.stat().st_size
+
+    with _make_progress() as progress:
+        task_id = progress.add_task(f"Checksumming {file_path.name}", total=total_bytes)
+
+        def _progress(done: int) -> None:
+            progress.update(task_id, completed=done)
+
+        try:
+            digests = multi_hash(file_path, algorithms=algo_list, progress_callback=_progress)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"\n[bold red]Error:[/bold red] {exc}")
+            sys.exit(1)
+
+    table = Table(
+        title=f"Checksums: {file_path.name}",
+        show_header=True,
+        header_style="bold cyan",
+        border_style="bright_black",
+    )
+    table.add_column("Algorithm", style="bold", width=10)
+    table.add_column("Digest", style="cyan")
+
+    for algo, digest in digests.items():
+        table.add_row(algo.upper(), digest)
+
+    console.print()
+    console.print(table)
+
+    if save:
+        for algo, digest in digests.items():
+            sidecar = write_sidecar(file_path, digest, algorithm=algo)
+            console.print(f"  [dim]Saved sidecar: {sidecar.name}[/dim]")
+
+    console.print()
+
+
+# ---------------------------------------------------------------------------
+# mount / unmount
+# ---------------------------------------------------------------------------
+
+@main.command("mount")
+@click.argument("image")
+@click.option(
+    "--mountpoint", "-m", default=None,
+    help=(
+        "Directory to mount at.  "
+        "Linux: defaults to a new temp directory.  "
+        "macOS/Windows: OS picks the mountpoint automatically when omitted."
+    ),
+)
+@click.option("--dry-run", is_flag=True, default=False, help="Simulate without mounting.")
+@click.pass_context
+def cmd_mount(
+    ctx: click.Context,
+    image: str,
+    mountpoint: Optional[str],
+    dry_run: bool,
+) -> None:
+    """Mount a disk IMAGE for read-only browsing.
+
+    Requires root/Administrator on most platforms.
+
+    Examples:
+
+        disktool mount backup.img
+
+        disktool mount backup.img --mountpoint /mnt/img
+
+        disktool mount backup.img --dry-run
+    """
+    from disktool.core.mount import mount_image
+
+    try:
+        info = mount_image(image, mountpoint=mountpoint, dry_run=dry_run)
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        sys.exit(1)
+    except ValueError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        sys.exit(1)
+    except OSError as exc:
+        console.print(f"[bold red]Mount failed:[/bold red] {exc}")
+        console.print("[dim]Hint: mounting requires root/Administrator privileges.[/dim]")
+        sys.exit(1)
+    except PermissionError:
+        console.print("[bold red]Permission denied.[/bold red] Try running as root/Administrator.")
+        sys.exit(1)
+
+    if dry_run:
+        console.print(f"[yellow][DRY RUN] Would mount {image}.[/yellow]")
+    else:
+        mp = info.get("mountpoint") or "(OS-assigned)"
+        loop = info.get("loop_device")
+        console.print(f"\n[bold green]✓ Mounted![/bold green]")
+        console.print(f"  Image:      [cyan]{image}[/cyan]")
+        console.print(f"  Mountpoint: [cyan]{mp}[/cyan]")
+        if loop:
+            console.print(f"  Loop dev:   [dim]{loop}[/dim]")
+        console.print(f"\n[dim]Run [bold]disktool unmount {mp}[/bold] when done.[/dim]")
+
+
+@main.command("unmount")
+@click.argument("image_or_mountpoint")
+@click.option("--dry-run", is_flag=True, default=False, help="Simulate without unmounting.")
+@click.pass_context
+def cmd_unmount(
+    ctx: click.Context,
+    image_or_mountpoint: str,
+    dry_run: bool,
+) -> None:
+    """Unmount a previously mounted disk image.
+
+    Pass either the original IMAGE path or the MOUNTPOINT directory.
+
+    Examples:
+
+        disktool unmount /mnt/img
+
+        disktool unmount backup.img --dry-run
+    """
+    from disktool.core.mount import unmount_image
+
+    try:
+        ok = unmount_image(image_or_mountpoint, dry_run=dry_run)
+    except ValueError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}")
+        sys.exit(1)
+    except OSError as exc:
+        console.print(f"[bold red]Unmount failed:[/bold red] {exc}")
+        sys.exit(1)
+    except PermissionError:
+        console.print("[bold red]Permission denied.[/bold red] Try running as root/Administrator.")
+        sys.exit(1)
+
+    if dry_run:
+        console.print(f"[yellow][DRY RUN] Would unmount {image_or_mountpoint}.[/yellow]")
+    elif ok:
+        console.print(f"\n[bold green]✓ Unmounted {image_or_mountpoint}.[/bold green]")
+    else:
+        console.print(f"\n[bold red]✗ Unmount failed.[/bold red]")
+        sys.exit(2)
+
+
 if __name__ == "__main__":
     main()
