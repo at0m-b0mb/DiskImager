@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import platform
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -14,11 +16,54 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 4 * 1024 * 1024  # 4 MiB – good balance of speed and memory
+_DISKUTIL_TIMEOUT = 30  # seconds to wait for diskutil unmountDisk on macOS
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _unmount_disk_darwin(dest: str) -> None:
+    """Unmount all volumes on *dest* before writing (macOS only).
+
+    On macOS, mounted partitions keep the underlying device node busy,
+    causing ``OSError: [Errno 16] Resource busy`` when ``open()`` tries
+    to open the device for writing.  ``diskutil unmountDisk`` releases
+    all mounted volumes on the disk so the device can be opened.
+
+    This function is safe to call unconditionally – it is a no-op on
+    non-macOS platforms, for regular file paths, and when the disk is
+    already fully unmounted.  Failures are logged at DEBUG level and
+    never propagated so that the caller can still attempt the write.
+    """
+    if sys.platform != "darwin":
+        return
+    # Only act on block device paths (/dev/diskN or /dev/rdiskN)
+    if not dest.startswith("/dev/"):
+        return
+    # Normalise in one pass: strip /dev/, optional leading 'r', disk id,
+    # optional partition suffix – e.g. /dev/rdisk4s1 → disk4, /dev/disk4 → disk4
+    node = re.sub(r"^r?(disk\d+)(?:s\d+.*)?$", r"\1", dest[len("/dev/"):])
+    if not re.match(r"^disk\d+$", node):
+        return  # doesn't look like a whole-disk node; skip
+    disk_path = f"/dev/{node}"
+    try:
+        result = subprocess.run(
+            ["diskutil", "unmountDisk", disk_path],
+            capture_output=True,
+            text=True,
+            timeout=_DISKUTIL_TIMEOUT,
+        )
+        if result.returncode == 0:
+            logger.info("Unmounted %s before write: %s", disk_path, result.stdout.strip())
+        else:
+            logger.debug(
+                "diskutil unmountDisk %s returned %d: %s",
+                disk_path, result.returncode, result.stderr.strip(),
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("Could not run diskutil unmountDisk %s: %s", disk_path, exc)
+
 
 def _open_device(path: str, mode: str):
     """Open a device or file with OS-level unbuffered access."""
@@ -201,6 +246,8 @@ def restore(
         logger.info("[DRY RUN] No data written.")
         return True
 
+    _unmount_disk_darwin(dest)
+
     h = hashlib.sha256()
     bytes_done = 0
     start_time = time.monotonic()
@@ -318,6 +365,8 @@ def clone(
         logger.info("[DRY RUN] No data written.")
         return ""
 
+    _unmount_disk_darwin(dest)
+
     h = hashlib.sha256()
     bytes_done = 0
     start_time = time.monotonic()
@@ -385,6 +434,8 @@ def erase(
     if dry_run:
         logger.info("[DRY RUN] No data written.")
         return True
+
+    _unmount_disk_darwin(dest)
 
     start_time = time.monotonic()
     for pass_num in range(passes):
