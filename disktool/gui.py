@@ -481,7 +481,13 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             ("Flash",    "flash"),
             ("Clone",    "clone"),
             ("Verify",   "verify"),
+            ("Format",   "format"),
             ("Erase",    "erase"),
+            ("Benchmark","benchmark"),
+            ("Partition","partition"),
+            ("Compress", "compress"),
+            ("Checksum", "checksum"),
+            ("Mount",    "mount"),
             ("Activity", "activity"),
         ]:
             btn = _NavButton(sb, label, tab, self._switch_tab)
@@ -598,7 +604,7 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         )
         tv.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 6))
         self._tabview = tv
-        for tab in ("Backup", "Restore", "Flash", "Clone", "Verify", "Erase", "Activity"):
+        for tab in ("Backup", "Restore", "Flash", "Clone", "Verify", "Format", "Erase", "Benchmark", "Partition", "Compress", "Checksum", "Mount", "Activity"):
             tv.add(tab)
         tv.set("Backup")
         self._build_backup_tab(tv.tab("Backup"))
@@ -606,7 +612,13 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._build_flash_tab(tv.tab("Flash"))
         self._build_clone_tab(tv.tab("Clone"))
         self._build_verify_tab(tv.tab("Verify"))
+        self._build_format_tab(tv.tab("Format"))
         self._build_erase_tab(tv.tab("Erase"))
+        self._build_benchmark_tab(tv.tab("Benchmark"))
+        self._build_partition_tab(tv.tab("Partition"))
+        self._build_compress_tab(tv.tab("Compress"))
+        self._build_checksum_tab(tv.tab("Checksum"))
+        self._build_mount_tab(tv.tab("Mount"))
         self._build_activity_tab(tv.tab("Activity"))
 
     def _build_statusbar(self) -> None:
@@ -846,6 +858,69 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         self._copy_hash_btn.pack(side="left", padx=(8, 0))
         self._last_digest: Optional[str] = None
 
+    def _build_format_tab(self, tab: Any) -> None:
+        from disktool.core.format import filesystem_label, list_supported_filesystems
+
+        self._section_title(tab, "Format a Drive / Partition")
+        self._divider(tab)
+        self._form_row(tab, "Target device:", "_format_dst", "/dev/sdb")
+        self._divider(tab)
+
+        # File-system selector row
+        fs_row = ctk.CTkFrame(tab, fg_color="transparent")
+        fs_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            fs_row, text="File system:", width=150, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+
+        supported = list_supported_filesystems()
+        fs_display = [filesystem_label(fs) for fs in supported]
+        self._format_fs_map: dict[str, str] = dict(zip(fs_display, supported))
+
+        self._format_fs_var = tk.StringVar(value=fs_display[0] if fs_display else "")
+        self._format_fs_menu = ctk.CTkOptionMenu(
+            fs_row,
+            values=fs_display,
+            variable=self._format_fs_var,
+            font=ctk.CTkFont(size=12),
+            width=140,
+        )
+        self._format_fs_menu.pack(side="left", padx=(4, 8))
+
+        # Volume label row
+        label_row = ctk.CTkFrame(tab, fg_color="transparent")
+        label_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            label_row, text="Volume label:", width=150, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._format_label_entry = ctk.CTkEntry(
+            label_row, placeholder_text="DISK", width=160,
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+            fg_color=P("card2"), border_color=P("border"),
+        )
+        self._format_label_entry.pack(side="left", padx=(4, 0))
+
+        self._divider(tab)
+
+        opt = ctk.CTkFrame(tab, fg_color="transparent")
+        opt.pack(fill="x", padx=16, pady=2)
+        self._format_dry_run = ctk.CTkCheckBox(
+            opt, text="Dry run (simulate, no write)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._format_dry_run.pack(side="left", padx=(0, 20))
+
+        self._divider(tab)
+        self._warn_box(tab, "⚠  All data on the target device will be permanently destroyed.")
+        ctk.CTkButton(
+            tab, text="Format Drive",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("danger"), hover_color="#b91c1c",
+            height=38, command=self._start_format,
+        ).pack(padx=16, pady=(4, 14), anchor="w")
+
     def _build_erase_tab(self, tab: Any) -> None:
         self._section_title(tab, "Securely Erase a Drive")
         self._divider(tab)
@@ -887,6 +962,312 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
             fg_color=P("danger"), hover_color="#b91c1c",
             height=38, command=self._start_erase,
         ).pack(padx=16, pady=(4, 14), anchor="w")
+
+    def _build_benchmark_tab(self, tab: Any) -> None:
+        self._section_title(tab, "Disk Speed Benchmark")
+        self._divider(tab)
+        self._form_row(tab, "Device / Directory:", "_bench_dev", "/dev/sdb")
+        self._divider(tab)
+
+        size_row = ctk.CTkFrame(tab, fg_color="transparent")
+        size_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            size_row, text="Test size (MB):", width=150, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._bench_size_var = tk.StringVar(value="64")
+        ctk.CTkOptionMenu(
+            size_row,
+            values=["16", "32", "64", "128", "256", "512"],
+            variable=self._bench_size_var,
+            font=ctk.CTkFont(size=12),
+            width=90,
+        ).pack(side="left", padx=(4, 8))
+
+        self._divider(tab)
+
+        opt = ctk.CTkFrame(tab, fg_color="transparent")
+        opt.pack(fill="x", padx=16, pady=2)
+        self._bench_do_read = ctk.CTkCheckBox(
+            opt, text="Read benchmark",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._bench_do_read.pack(side="left", padx=(0, 20))
+        self._bench_do_read.select()
+        self._bench_do_write = ctk.CTkCheckBox(
+            opt, text="Write benchmark",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._bench_do_write.pack(side="left")
+
+        self._divider(tab)
+
+        self._bench_result_lbl = ctk.CTkLabel(
+            tab,
+            text="Results will appear here after the benchmark finishes.",
+            font=ctk.CTkFont(size=12), text_color=P("text_muted"), anchor="w",
+            wraplength=580,
+        )
+        self._bench_result_lbl.pack(fill="x", padx=16, pady=(4, 2))
+
+        ctk.CTkButton(
+            tab, text="Run Benchmark",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("accent"), hover_color="#196127",
+            height=38, command=self._start_benchmark,
+        ).pack(padx=16, pady=(8, 14), anchor="w")
+
+    def _build_partition_tab(self, tab: Any) -> None:
+        from disktool.core.partition import list_partition_schemes
+
+        self._section_title(tab, "Create Partition Table")
+        self._divider(tab)
+        self._form_row(tab, "Target device:", "_part_dev", "/dev/sdb")
+        self._divider(tab)
+
+        scheme_row = ctk.CTkFrame(tab, fg_color="transparent")
+        scheme_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            scheme_row, text="Partition scheme:", width=150, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._part_scheme_var = tk.StringVar(value="GPT")
+        ctk.CTkOptionMenu(
+            scheme_row,
+            values=[s.upper() for s in list_partition_schemes()],
+            variable=self._part_scheme_var,
+            font=ctk.CTkFont(size=12),
+            width=100,
+        ).pack(side="left", padx=(4, 8))
+
+        # Optional partition to create immediately
+        self._divider(tab)
+        ctk.CTkLabel(
+            tab,
+            text="Initial partition (optional):",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color=P("text"), anchor="w",
+        ).pack(fill="x", padx=16, pady=(4, 0))
+
+        part_row = ctk.CTkFrame(tab, fg_color="transparent")
+        part_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            part_row, text="Size:", width=60, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._part_size_entry = ctk.CTkEntry(
+            part_row, placeholder_text="100%  or  8G  or  512M", width=160,
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+            fg_color=P("card2"), border_color=P("border"),
+        )
+        self._part_size_entry.pack(side="left", padx=(4, 16))
+
+        ctk.CTkLabel(
+            part_row, text="FS:", width=30, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._part_fs_var = tk.StringVar(value="(none)")
+        ctk.CTkOptionMenu(
+            part_row,
+            values=["(none)", "FAT32", "exFAT", "NTFS", "ext4", "ext3", "ext2", "btrfs", "HFS+"],
+            variable=self._part_fs_var,
+            font=ctk.CTkFont(size=12),
+            width=110,
+        ).pack(side="left", padx=(4, 0))
+
+        label_row = ctk.CTkFrame(tab, fg_color="transparent")
+        label_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            label_row, text="Label:", width=60, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._part_label_entry = ctk.CTkEntry(
+            label_row, placeholder_text="optional partition name", width=200,
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+            fg_color=P("card2"), border_color=P("border"),
+        )
+        self._part_label_entry.pack(side="left", padx=(4, 0))
+
+        self._divider(tab)
+        opt = ctk.CTkFrame(tab, fg_color="transparent")
+        opt.pack(fill="x", padx=16, pady=2)
+        self._part_dry_run = ctk.CTkCheckBox(
+            opt, text="Dry run (simulate, no write)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._part_dry_run.pack(side="left")
+
+        self._divider(tab)
+        self._warn_box(tab, "⚠  All existing partitions and data on the target will be destroyed.")
+        ctk.CTkButton(
+            tab, text="Create Partition Table",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("danger"), hover_color="#b91c1c",
+            height=38, command=self._start_partition,
+        ).pack(padx=16, pady=(4, 14), anchor="w")
+
+    def _build_compress_tab(self, tab: Any) -> None:
+        from disktool.core.compress import list_supported_algorithms
+
+        self._section_title(tab, "Compress / Decompress Image")
+        self._divider(tab)
+        self._form_row(tab, "Image file:", "_compress_src", "/path/to/image.img")
+        self._divider(tab)
+
+        alg_row = ctk.CTkFrame(tab, fg_color="transparent")
+        alg_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            alg_row, text="Algorithm:", width=120, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        supported = list_supported_algorithms()
+        self._compress_alg_var = tk.StringVar(value="gzip")
+        ctk.CTkOptionMenu(
+            alg_row,
+            values=supported,
+            variable=self._compress_alg_var,
+            font=ctk.CTkFont(size=12),
+            width=100,
+        ).pack(side="left", padx=(4, 16))
+
+        ctk.CTkLabel(
+            alg_row, text="Level:", width=50, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._compress_level_var = tk.StringVar(value="(default)")
+        ctk.CTkOptionMenu(
+            alg_row,
+            values=["(default)"] + [str(i) for i in range(1, 10)],
+            variable=self._compress_level_var,
+            font=ctk.CTkFont(size=12),
+            width=90,
+        ).pack(side="left", padx=(4, 0))
+
+        self._divider(tab)
+        opt_row = ctk.CTkFrame(tab, fg_color="transparent")
+        opt_row.pack(fill="x", padx=16, pady=2)
+        self._compress_decompress = ctk.CTkCheckBox(
+            opt_row, text="Decompress (auto-detect algorithm from extension)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._compress_decompress.pack(side="left")
+
+        self._divider(tab)
+        self._compress_result_lbl = ctk.CTkLabel(
+            tab, text="",
+            font=ctk.CTkFont(size=12), text_color=P("text_muted"), anchor="w",
+            wraplength=580,
+        )
+        self._compress_result_lbl.pack(fill="x", padx=16, pady=(4, 2))
+        ctk.CTkButton(
+            tab, text="Run",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("accent"), hover_color="#196127",
+            height=38, command=self._start_compress,
+        ).pack(padx=16, pady=(8, 14), anchor="w")
+
+    def _build_checksum_tab(self, tab: Any) -> None:
+        self._section_title(tab, "Multi-Algorithm Checksum")
+        self._divider(tab)
+        self._form_row(tab, "File / device:", "_checksum_src", "/path/to/image.img")
+        self._divider(tab)
+
+        algo_row = ctk.CTkFrame(tab, fg_color="transparent")
+        algo_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            algo_row, text="Algorithms:", width=120, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._checksum_md5    = ctk.CTkCheckBox(algo_row, text="MD5",    font=ctk.CTkFont(size=12), text_color=P("text"))
+        self._checksum_sha1   = ctk.CTkCheckBox(algo_row, text="SHA-1",  font=ctk.CTkFont(size=12), text_color=P("text"))
+        self._checksum_sha256 = ctk.CTkCheckBox(algo_row, text="SHA-256",font=ctk.CTkFont(size=12), text_color=P("text"))
+        self._checksum_sha512 = ctk.CTkCheckBox(algo_row, text="SHA-512",font=ctk.CTkFont(size=12), text_color=P("text"))
+        for cb in (self._checksum_md5, self._checksum_sha1,
+                   self._checksum_sha256, self._checksum_sha512):
+            cb.pack(side="left", padx=(0, 14))
+            cb.select()
+
+        self._divider(tab)
+        save_row = ctk.CTkFrame(tab, fg_color="transparent")
+        save_row.pack(fill="x", padx=16, pady=2)
+        self._checksum_save = ctk.CTkCheckBox(
+            save_row, text="Save sidecar files (.md5 / .sha256 / …)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._checksum_save.pack(side="left")
+
+        self._divider(tab)
+        self._checksum_result_frame = ctk.CTkFrame(tab, fg_color=P("card2"), corner_radius=6)
+        self._checksum_result_frame.pack(fill="x", padx=16, pady=(4, 2))
+        self._checksum_result_lbl = ctk.CTkLabel(
+            self._checksum_result_frame,
+            text="Results will appear here.",
+            font=ctk.CTkFont(family="monospace", size=11),
+            text_color=P("text_muted"), anchor="w", justify="left",
+            wraplength=560,
+        )
+        self._checksum_result_lbl.pack(fill="x", padx=10, pady=8)
+
+        ctk.CTkButton(
+            tab, text="Compute Checksums",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("accent"), hover_color="#196127",
+            height=38, command=self._start_checksum,
+        ).pack(padx=16, pady=(8, 14), anchor="w")
+
+    def _build_mount_tab(self, tab: Any) -> None:
+        self._section_title(tab, "Mount / Unmount Disk Image")
+        self._divider(tab)
+        self._form_row(tab, "Image file:", "_mount_image", "/path/to/image.img")
+        self._divider(tab)
+
+        mp_row = ctk.CTkFrame(tab, fg_color="transparent")
+        mp_row.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(
+            mp_row, text="Mountpoint:", width=120, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        ).pack(side="left")
+        self._mount_point_entry = ctk.CTkEntry(
+            mp_row,
+            placeholder_text="(auto – a temp dir is created)",
+            width=300,
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+            fg_color=P("card2"), border_color=P("border"),
+        )
+        self._mount_point_entry.pack(side="left", padx=(4, 0))
+
+        self._divider(tab)
+        opt_row = ctk.CTkFrame(tab, fg_color="transparent")
+        opt_row.pack(fill="x", padx=16, pady=2)
+        self._mount_dry_run = ctk.CTkCheckBox(
+            opt_row, text="Dry run (simulate, no actual mount)",
+            font=ctk.CTkFont(size=12), text_color=P("text"),
+        )
+        self._mount_dry_run.pack(side="left")
+
+        self._divider(tab)
+        self._mount_info_lbl = ctk.CTkLabel(
+            tab,
+            text="",
+            font=ctk.CTkFont(size=12), text_color=P("text_muted"), anchor="w",
+            wraplength=580,
+        )
+        self._mount_info_lbl.pack(fill="x", padx=16, pady=(4, 2))
+
+        btn_row = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(8, 14))
+        ctk.CTkButton(
+            btn_row, text="Mount Image",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("accent"), hover_color="#196127",
+            height=38, command=self._start_mount,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            btn_row, text="Unmount",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P("card2"), hover_color=P("hover"),
+            text_color=P("text"),
+            height=38, command=self._start_unmount,
+        ).pack(side="left")
 
     def _build_activity_tab(self, tab: Any) -> None:
         self._section_title(tab, "Activity Log")
@@ -996,6 +1377,24 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
         elif current == "Erase":
             self._erase_dst.delete(0, "end")
             self._erase_dst.insert(0, path)
+        elif current == "Format":
+            self._format_dst.delete(0, "end")
+            self._format_dst.insert(0, path)
+        elif current == "Benchmark":
+            self._bench_dev.delete(0, "end")
+            self._bench_dev.insert(0, path)
+        elif current == "Partition":
+            self._part_dev.delete(0, "end")
+            self._part_dev.insert(0, path)
+        elif current == "Compress":
+            self._compress_src.delete(0, "end")
+            self._compress_src.insert(0, path)
+        elif current == "Checksum":
+            self._checksum_src.delete(0, "end")
+            self._checksum_src.insert(0, path)
+        elif current == "Mount":
+            self._mount_image.delete(0, "end")
+            self._mount_image.insert(0, path)
         self._set_status(f"Selected: {path}  {sg:.1f} GB  {model}")
         self._log(f"Drive selected: {path}  ({sg:.1f} GB  {model}  {usb})")
 
@@ -1078,13 +1477,19 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
 
     def _switch_tab(self, tab_name: str) -> None:
         tab_map = {
-            "backup":   "Backup",
-            "restore":  "Restore",
-            "flash":    "Flash",
-            "clone":    "Clone",
-            "verify":   "Verify",
-            "erase":    "Erase",
-            "activity": "Activity",
+            "backup":    "Backup",
+            "restore":   "Restore",
+            "flash":     "Flash",
+            "clone":     "Clone",
+            "verify":    "Verify",
+            "format":    "Format",
+            "erase":     "Erase",
+            "benchmark": "Benchmark",
+            "partition": "Partition",
+            "compress":  "Compress",
+            "checksum":  "Checksum",
+            "mount":     "Mount",
+            "activity":  "Activity",
         }
         if tab_name in tab_map:
             self._tabview.set(tab_map[tab_name])
@@ -1461,6 +1866,415 @@ class DiskImagerApp(ctk.CTk):  # type: ignore[misc]
                     dlg.finish(f"Error: {err}", success=False)
                     messagebox.showerror("Erase Failed", err)
                     self._log(f"Erase ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_benchmark(self) -> None:
+        device = self._bench_dev.get().strip()
+        if not device:
+            messagebox.showerror("Missing input", "Please enter a device path or directory.")
+            return
+        try:
+            size_mb = int(self._bench_size_var.get())
+        except (ValueError, AttributeError):
+            size_mb = 64
+        do_read = self._bench_do_read.get() == 1
+        do_write = self._bench_do_write.get() == 1
+        if not do_read and not do_write:
+            messagebox.showerror("Nothing to do", "Select at least one of Read / Write benchmark.")
+            return
+
+        ops = []
+        if do_read:
+            ops.append("Read")
+        if do_write:
+            ops.append("Write")
+        self._log(f"Benchmark: {device}  size={size_mb} MB  ops={'+'.join(ops)}")
+        self._set_status("Benchmark running…")
+        self._bench_result_lbl.configure(text="Running…", text_color=P("text_muted"))
+        dlg = ProgressDialog(self, f"Benchmark {device}")
+
+        def _progress(done: int, total: int, speed: float) -> None:
+            try:
+                self.after(0, lambda: dlg.update_progress(done, total, speed))
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            from disktool.core.benchmark import benchmark_read, benchmark_write
+            lines: list[str] = []
+            try:
+                if do_read:
+                    r = benchmark_read(device, size_mb=size_mb, progress_callback=_progress)
+                    lines.append(
+                        f"Read:  {r['speed_mb_s']:.2f} MB/s  "
+                        f"({r['size_mb']:.1f} MB  in {r['duration_s']:.3f} s)"
+                    )
+                if do_write:
+                    r = benchmark_write(device, size_mb=size_mb, progress_callback=_progress)
+                    lines.append(
+                        f"Write: {r['speed_mb_s']:.2f} MB/s  "
+                        f"({r['size_mb']:.1f} MB  in {r['duration_s']:.3f} s)"
+                    )
+                summary = "\n".join(lines)
+
+                def _ok() -> None:
+                    dlg.finish("Benchmark complete!", success=True)
+                    self._bench_result_lbl.configure(text=summary, text_color=P("success"))
+                    self._log(f"Benchmark done: {device}  " + "  |  ".join(lines))
+                    self._set_status("Benchmark complete.")
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("benchmark error: %s", exc)
+
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Benchmark Failed", err)
+                    self._bench_result_lbl.configure(text=f"Error: {err}", text_color=P("danger"))
+                    self._log(f"Benchmark ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_partition(self) -> None:
+        dst = self._part_dev.get().strip()
+        scheme = self._part_scheme_var.get().lower()
+        dry = self._part_dry_run.get() == 1
+        if not dst:
+            messagebox.showerror("Missing input", "Please enter the target device path.")
+            return
+        info = next((d for d in self._drives if d.get("path") == dst), None)
+        if info and info.get("is_system"):
+            messagebox.showerror(
+                "System Disk Blocked",
+                f"{dst} is a system disk. Repartitioning system disks is blocked for safety.",
+            )
+            return
+
+        # Collect optional initial partition
+        part_size = self._part_size_entry.get().strip()
+        part_fs_raw = self._part_fs_var.get()
+        part_fs = None if part_fs_raw == "(none)" else part_fs_raw.lower()
+        part_label = self._part_label_entry.get().strip() or None
+
+        if not dry:
+            sg    = info.get("size_gb", "?") if info else "?"
+            model = info.get("model", "unknown") if info else "unknown"
+            msg = (
+                f"You are about to create a {scheme.upper()} partition table on "
+                f"{sg} GB  {model}  ({dst}).\n\n"
+                "All existing partitions and data will be permanently destroyed."
+            )
+            if not ask_confirm(self, msg):
+                return
+
+        self._log(
+            f"Partition: {dst} scheme={scheme.upper()}"
+            + (f" part_size={part_size}" if part_size else "")
+            + (" [dry-run]" if dry else "")
+        )
+        self._set_status("Partitioning…")
+        dlg = ProgressDialog(self, f"Partition {dst}")
+
+        def _worker() -> None:
+            from disktool.core.partition import add_partition, create_partition_table
+            try:
+                create_partition_table(dst, scheme, dry_run=dry)
+                if part_size:
+                    add_partition(
+                        dst, size=part_size,
+                        filesystem=part_fs, label=part_label,
+                        dry_run=dry,
+                    )
+                def _ok() -> None:
+                    dlg.finish(
+                        f"{'[DRY RUN] ' if dry else ''}"
+                        f"{scheme.upper()} table created on {dst}.",
+                        success=True,
+                    )
+                    self._log(
+                        f"Partition OK: {dst} → {scheme.upper()}"
+                        + (f" + {part_size}" if part_size else "")
+                    )
+                    self._set_status("Partition complete.")
+                    if not dry:
+                        messagebox.showinfo(
+                            "Partition Complete",
+                            f"{scheme.upper()} partition table created on {dst}.\n\n"
+                            "Use 'Format' to write a file system to your new partition(s).",
+                        )
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("partition error: %s", exc)
+
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Partition Failed", err)
+                    self._log(f"Partition ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_compress(self) -> None:
+        src = self._compress_src.get().strip()
+        if not src:
+            messagebox.showerror("Missing input", "Please enter the image file path.")
+            return
+        algorithm = self._compress_alg_var.get()
+        level_str = self._compress_level_var.get()
+        level = int(level_str) if level_str.isdigit() else None
+        decompress = self._compress_decompress.get() == 1
+
+        self._log(
+            f"{'Decompress' if decompress else 'Compress'}: {src}"
+            + (f"  algorithm={algorithm}" if not decompress else "")
+        )
+        self._set_status(f"{'Decompressing' if decompress else 'Compressing'}…")
+        self._compress_result_lbl.configure(text="Running…", text_color=P("text_muted"))
+        dlg = ProgressDialog(self, f"{'Decompress' if decompress else 'Compress'} {src}")
+
+        def _progress(done: int, total: int, speed: float) -> None:
+            try:
+                self.after(0, lambda: dlg.update_progress(done, total, speed))
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            from disktool.core.compress import compress_image, decompress_image
+            from pathlib import Path as _Path
+            try:
+                if decompress:
+                    out_path = decompress_image(src, progress_callback=_progress)
+                    summary = f"Decompressed → {out_path}"
+                else:
+                    out_path = compress_image(
+                        src, algorithm=algorithm, level=level,
+                        progress_callback=_progress,
+                    )
+                    in_size = _Path(src).stat().st_size
+                    out_size = out_path.stat().st_size
+                    ratio = (1 - out_size / in_size) * 100 if in_size > 0 else 0
+                    summary = f"Compressed → {out_path}  (saved {ratio:.1f}%)"
+
+                def _ok() -> None:
+                    dlg.finish(summary, success=True)
+                    self._compress_result_lbl.configure(text=summary, text_color=P("success"))
+                    self._log(f"Compress OK: {summary}")
+                    self._set_status("Complete.")
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("compress error: %s", exc)
+
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Compress Failed", err)
+                    self._compress_result_lbl.configure(text=f"Error: {err}", text_color=P("danger"))
+                    self._log(f"Compress ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_checksum(self) -> None:
+        src = self._checksum_src.get().strip()
+        if not src:
+            messagebox.showerror("Missing input", "Please enter the file/device path.")
+            return
+        algo_map = {
+            "md5":    self._checksum_md5.get() == 1,
+            "sha1":   self._checksum_sha1.get() == 1,
+            "sha256": self._checksum_sha256.get() == 1,
+            "sha512": self._checksum_sha512.get() == 1,
+        }
+        algos = [k for k, v in algo_map.items() if v]
+        if not algos:
+            messagebox.showerror("No algorithms", "Select at least one hash algorithm.")
+            return
+        save = self._checksum_save.get() == 1
+
+        self._log(f"Checksum: {src}  algorithms={', '.join(algos)}")
+        self._set_status("Computing checksums…")
+        self._checksum_result_lbl.configure(text="Computing…", text_color=P("text_muted"))
+        dlg = ProgressDialog(self, f"Checksum {src}")
+
+        def _progress(done: int) -> None:
+            try:
+                from pathlib import Path as _Path
+                try:
+                    total = _Path(src).stat().st_size
+                except OSError:
+                    total = done
+                self.after(0, lambda: dlg.update_progress(done, total, 0))
+            except Exception:
+                pass
+
+        def _worker() -> None:
+            from disktool.core.verify import multi_hash, write_sidecar
+            from pathlib import Path as _Path
+            try:
+                digests = multi_hash(src, algorithms=algos, progress_callback=_progress)
+                lines = [f"{algo.upper():<8} {digest}" for algo, digest in digests.items()]
+                summary = "\n".join(lines)
+                if save:
+                    for algo, digest in digests.items():
+                        write_sidecar(_Path(src), digest, algorithm=algo)
+
+                def _ok() -> None:
+                    dlg.finish("Checksums computed.", success=True)
+                    self._checksum_result_lbl.configure(text=summary, text_color=P("text"))
+                    self._log(f"Checksum: {src}\n  " + "\n  ".join(lines))
+                    self._set_status("Checksums complete.")
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("checksum error: %s", exc)
+
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Checksum Failed", err)
+                    self._checksum_result_lbl.configure(text=f"Error: {err}", text_color=P("danger"))
+                    self._log(f"Checksum ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_mount(self) -> None:
+        image = self._mount_image.get().strip()
+        if not image:
+            messagebox.showerror("Missing input", "Please enter the image file path.")
+            return
+        mountpoint = self._mount_point_entry.get().strip() or None
+        dry = self._mount_dry_run.get() == 1
+
+        self._log(f"Mount: {image}" + (f"  at {mountpoint}" if mountpoint else ""))
+        self._set_status("Mounting…")
+        self._mount_info_lbl.configure(text="Mounting…", text_color=P("text_muted"))
+
+        def _worker() -> None:
+            from disktool.core.mount import mount_image
+            try:
+                info = mount_image(image, mountpoint=mountpoint, dry_run=dry)
+                mp = info.get("mountpoint") or "(OS-assigned)"
+                loop = info.get("loop_device") or ""
+                summary = f"{'[DRY RUN] ' if dry else ''}Mounted at {mp}" + (f"  (loop: {loop})" if loop else "")
+
+                def _ok() -> None:
+                    self._mount_info_lbl.configure(text=summary, text_color=P("success"))
+                    self._log(f"Mount OK: {summary}")
+                    self._set_status(f"Mounted at {mp}.")
+                    if not dry:
+                        messagebox.showinfo(
+                            "Mounted",
+                            f"Image mounted at:\n{mp}\n\nUse 'Unmount' when done browsing.",
+                        )
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("mount error: %s", exc)
+
+                def _err() -> None:
+                    self._mount_info_lbl.configure(text=f"Error: {err}", text_color=P("danger"))
+                    messagebox.showerror("Mount Failed", err)
+                    self._log(f"Mount ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_unmount(self) -> None:
+        target = self._mount_image.get().strip()
+        mp_entry = self._mount_point_entry.get().strip()
+        target = mp_entry or target
+        if not target:
+            messagebox.showerror("Missing input", "Enter the image path or mountpoint to unmount.")
+            return
+        dry = self._mount_dry_run.get() == 1
+
+        self._log(f"Unmount: {target}")
+        self._set_status("Unmounting…")
+
+        def _worker() -> None:
+            from disktool.core.mount import unmount_image
+            try:
+                unmount_image(target, dry_run=dry)
+
+                def _ok() -> None:
+                    self._mount_info_lbl.configure(
+                        text=f"{'[DRY RUN] ' if dry else ''}Unmounted {target}.",
+                        text_color=P("success"),
+                    )
+                    self._log(f"Unmount OK: {target}")
+                    self._set_status("Unmounted.")
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("unmount error: %s", exc)
+
+                def _err() -> None:
+                    messagebox.showerror("Unmount Failed", err)
+                    self._log(f"Unmount ERROR: {err}")
+                    self._set_status(f"Error: {err}")
+                self.after(0, _err)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_format(self) -> None:
+        dst = self._format_dst.get().strip()
+        fs_display = self._format_fs_var.get()
+        fs = self._format_fs_map.get(fs_display, fs_display.lower())
+        label = self._format_label_entry.get().strip() or "DISK"
+        dry = self._format_dry_run.get() == 1
+        if not dst:
+            messagebox.showerror("Missing input", "Please enter the target device path.")
+            return
+        info = next((d for d in self._drives if d.get("path") == dst), None)
+        if info and info.get("is_system"):
+            messagebox.showerror(
+                "System Disk Blocked",
+                f"{dst} is a system disk. Formatting system disks is blocked for safety.",
+            )
+            return
+        if not dry:
+            sg    = info.get("size_gb", "?") if info else "?"
+            model = info.get("model", "unknown") if info else "unknown"
+            if not ask_confirm(
+                self,
+                f"You are about to FORMAT  {sg} GB  {model}  ({dst})\n"
+                f"as {fs_display} with label '{label}'.\n\n"
+                "All data will be permanently and irrecoverably destroyed.",
+            ):
+                return
+        self._log(f"Format: {dst} as {fs_display} label={label!r}" + (" [dry-run]" if dry else ""))
+        self._set_status("Format in progress...")
+        dlg = ProgressDialog(self, f"Format {dst}")
+
+        def _worker() -> None:
+            from disktool.core.format import format_disk
+            try:
+                format_disk(dst, fs, label=label, dry_run=dry)
+                def _ok() -> None:
+                    dlg.finish(
+                        f"Format complete!  {dst} is now {fs_display}.",
+                        success=True,
+                    )
+                    self._log(f"Format finished OK: {dst} → {fs_display}")
+                    self._set_status("Format complete.")
+                self.after(0, _ok)
+            except Exception as exc:
+                err = str(exc)
+                logger.error("format error: %s", exc)
+                def _err() -> None:
+                    dlg.finish(f"Error: {err}", success=False)
+                    messagebox.showerror("Format Failed", err)
+                    self._log(f"Format ERROR: {err}")
                     self._set_status(f"Error: {err}")
                 self.after(0, _err)
 
