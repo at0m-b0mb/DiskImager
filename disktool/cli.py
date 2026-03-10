@@ -569,6 +569,120 @@ def cmd_info(ctx: click.Context, device: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# format
+# ---------------------------------------------------------------------------
+
+@main.command("format")
+@click.argument("device")
+@click.argument("filesystem")
+@click.option("--label", default="DISK", show_default=True,
+              help="Volume label written to the new file system.")
+@click.option("--dry-run", is_flag=True, default=False, help="Simulate without formatting.")
+@click.option("--dangerous", is_flag=True, default=False, help="Allow formatting system disks.")
+@click.option("--list-fs", is_flag=True, default=False,
+              help="List supported file systems on this platform and exit.")
+@click.pass_context
+def cmd_format(
+    ctx: click.Context,
+    device: str,
+    filesystem: str,
+    label: str,
+    dry_run: bool,
+    dangerous: bool,
+    list_fs: bool,
+) -> None:
+    """Format DEVICE with FILESYSTEM.
+
+    DEVICE is the path to a block device or partition (e.g. /dev/disk4,
+    /dev/sdb, \\\\.\\PhysicalDrive1, or a Windows drive letter like E:).
+
+    FILESYSTEM is the target file system.  Common values:
+
+    \b
+        fat32   – FAT32 (SD cards, USB sticks, cross-platform)
+        exfat   – exFAT (large files, cross-platform)
+        ntfs    – NTFS  (Windows)
+        ext4    – ext4  (Linux)
+        hfs+    – HFS+  (macOS, journaled)
+        apfs    – APFS  (macOS 10.13+)
+
+    Run with --list-fs to see all file systems supported on this platform.
+
+    Example:
+
+        disktool format /dev/disk4 fat32 --label MIYOO
+
+        disktool format /dev/sdb ext4 --label DATA
+
+        disktool format E: ntfs --label BACKUP
+    """
+    from disktool.core.format import (
+        filesystem_label,
+        format_disk,
+        list_supported_filesystems,
+    )
+
+    if list_fs:
+        supported = list_supported_filesystems()
+        console.print("\n[bold cyan]Supported file systems on this platform:[/bold cyan]\n")
+        for fs in supported:
+            console.print(f"  [green]•[/green] [bold]{fs}[/bold]  ([dim]{filesystem_label(fs)}[/dim])")
+        console.print()
+        return
+
+    from disktool.core.disk import get_drives
+
+    drives = get_drives()
+    dest_info = next((d for d in drives if d.get("path") == device), None)
+
+    if dest_info and dest_info.get("is_system") and not dangerous:
+        console.print(
+            f"[bold red]Error:[/bold red] {device} is a system disk. "
+            "Use [bold]--dangerous[/bold] to override this safety check."
+        )
+        sys.exit(1)
+
+    size_gb = dest_info.get("size_gb", "?") if dest_info else "?"
+    model = dest_info.get("model", "unknown device") if dest_info else "unknown device"
+    fs_display = filesystem_label(filesystem)
+
+    if not dry_run:
+        _require_confirmation(
+            f"About to [red]FORMAT[/red] [bold]{size_gb} GB {model}[/bold] ({device})\n"
+            f"as [bold cyan]{fs_display}[/bold cyan] with label [bold]{label!r}[/bold].\n\n"
+            "All data on the target will be permanently destroyed."
+        )
+
+    try:
+        ok = format_disk(device, filesystem, label=label, dry_run=dry_run)
+    except ValueError as exc:
+        console.print(f"\n[bold red]Error:[/bold red] {exc}")
+        sys.exit(1)
+    except FileNotFoundError as exc:
+        console.print(f"\n[bold red]Formatting tool not found:[/bold red] {exc}")
+        sys.exit(1)
+    except OSError as exc:
+        console.print(f"\n[bold red]Format failed:[/bold red] {exc}")
+        sys.exit(1)
+    except PermissionError:
+        console.print("\n[bold red]Permission denied.[/bold red] Try running as root/Administrator.")
+        sys.exit(1)
+
+    if dry_run:
+        console.print("[yellow][DRY RUN] No changes made.[/yellow]")
+    elif ok:
+        console.print(
+            f"\n[bold green]✓ Format complete![/bold green]  "
+            f"[cyan]{device}[/cyan] is now [bold]{fs_display}[/bold]"
+            + (f" (label: [bold]{label}[/bold])" if label else "")
+            + "."
+        )
+    else:
+        console.print(f"\n[bold red]✗ Format failed.[/bold red]")
+        sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
 # erase
 # ---------------------------------------------------------------------------
 
